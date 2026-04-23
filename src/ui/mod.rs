@@ -3,12 +3,20 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
+use crate::game::{Player, WorldMapState, MAP_RADIUS};
+
 const TOP_BAR_HEIGHT: f32 = 126.0;
 const TOP_BAR_WIDTH: f32 = 456.0;
 const TOP_BAR_MARGIN: f32 = 6.0;
 const FPS_PANEL_MARGIN: f32 = 12.0;
+const MINIMAP_MARGIN: f32 = 12.0;
+const MINIMAP_SIZE: f32 = 168.0;
+const MINIMAP_MARKER_SIZE: f32 = 10.0;
 const BAR_BACKGROUND: Color = Color::srgba(0.02, 0.035, 0.07, 0.94);
 const PANEL_BACKGROUND: Color = Color::srgba(0.05, 0.075, 0.13, 0.96);
+const MINIMAP_BACKGROUND: Color = Color::srgba(0.04, 0.055, 0.1, 0.9);
+const MINIMAP_BORDER: Color = Color::srgba(0.96, 0.36, 0.34, 0.72);
+const MINIMAP_MARKER: Color = Color::srgba(0.94, 0.98, 1.0, 0.96);
 const BUTTON_BACKGROUND: Color = Color::srgba(0.09, 0.13, 0.2, 0.98);
 const BUTTON_HOVER_BACKGROUND: Color = Color::srgba(0.13, 0.19, 0.29, 1.0);
 const BUTTON_ACTIVE_BACKGROUND: Color = Color::srgba(0.0, 0.58, 0.86, 1.0);
@@ -32,7 +40,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiGameState>()
-            .add_systems(Startup, (spawn_top_bar, spawn_fps_counter))
+            .add_systems(Startup, (spawn_top_bar, spawn_fps_counter, spawn_minimap))
             .add_systems(
                 Update,
                 (
@@ -40,6 +48,7 @@ impl Plugin for UiPlugin {
                     handle_ui_buttons,
                     refresh_ui_buttons,
                     refresh_fps_counter,
+                    refresh_minimap,
                 ),
             );
     }
@@ -94,6 +103,12 @@ struct ModeStatusLabel;
 #[derive(Component)]
 struct FpsLabel;
 
+#[derive(Component)]
+struct MinimapRoot;
+
+#[derive(Component)]
+struct MinimapMarker;
+
 fn spawn_top_bar(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -141,7 +156,7 @@ fn spawn_fps_counter(mut commands: Commands) {
             style: Style {
                 position_type: PositionType::Absolute,
                 top: Val::Px(FPS_PANEL_MARGIN),
-                left: Val::Px(FPS_PANEL_MARGIN),
+                right: Val::Px(FPS_PANEL_MARGIN),
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                 border: UiRect::all(Val::Px(1.0)),
                 ..default()
@@ -163,6 +178,51 @@ fn spawn_fps_counter(mut commands: Commands) {
                     },
                 ),
                 FpsLabel,
+            ));
+        });
+}
+
+fn spawn_minimap(mut commands: Commands) {
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    top: Val::Px(MINIMAP_MARGIN),
+                    left: Val::Px(MINIMAP_MARGIN),
+                    width: Val::Px(MINIMAP_SIZE),
+                    height: Val::Px(MINIMAP_SIZE),
+                    padding: UiRect::ZERO,
+                    border: UiRect::all(Val::Px(1.5)),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    overflow: Overflow::clip(),
+                    ..default()
+                },
+                background_color: MINIMAP_BACKGROUND.into(),
+                border_color: MINIMAP_BORDER.into(),
+                border_radius: BorderRadius::all(Val::Percent(50.0)),
+                z_index: ZIndex::Global(11),
+                ..default()
+            },
+            MinimapRoot,
+        ))
+        .with_children(|minimap| {
+            minimap.spawn((
+                NodeBundle {
+                    style: Style {
+                        position_type: PositionType::Absolute,
+                        left: Val::Px((MINIMAP_SIZE - MINIMAP_MARKER_SIZE) / 2.0),
+                        top: Val::Px((MINIMAP_SIZE - MINIMAP_MARKER_SIZE) / 2.0),
+                        width: Val::Px(MINIMAP_MARKER_SIZE),
+                        height: Val::Px(MINIMAP_MARKER_SIZE),
+                        ..default()
+                    },
+                    background_color: MINIMAP_MARKER.into(),
+                    border_radius: BorderRadius::all(Val::Percent(50.0)),
+                    ..default()
+                },
+                MinimapMarker,
             ));
         });
 }
@@ -496,6 +556,51 @@ fn refresh_fps_counter(
     for mut text in &mut labels {
         text.sections[0].value = format!("FPS: {fps:.0}");
     }
+}
+
+fn refresh_minimap(
+    state: Res<UiGameState>,
+    map_state: Res<WorldMapState>,
+    player_query: Query<&Transform, With<Player>>,
+    mut minimap_roots: Query<&mut Visibility, With<MinimapRoot>>,
+    mut marker_styles: Query<&mut Style, With<MinimapMarker>>,
+) {
+    let minimap_visibility = if state.selected_mode == GameMode::Arcade {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+
+    for mut visibility in &mut minimap_roots {
+        *visibility = minimap_visibility;
+    }
+
+    if state.selected_mode != GameMode::Arcade {
+        return;
+    }
+
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+
+    let map_radius = map_state.radius.max(MAP_RADIUS);
+    let minimap_position =
+        world_to_minimap(player_transform.translation.truncate(), map_radius, MINIMAP_SIZE);
+
+    for mut style in &mut marker_styles {
+        style.left = Val::Px(minimap_position.x - MINIMAP_MARKER_SIZE / 2.0);
+        style.top = Val::Px(minimap_position.y - MINIMAP_MARKER_SIZE / 2.0);
+    }
+}
+
+fn world_to_minimap(world_position: Vec2, map_radius: f32, minimap_size: f32) -> Vec2 {
+    let normalized = (world_position / map_radius).clamp_length_max(1.0);
+    let half_size = minimap_size / 2.0;
+
+    Vec2::new(
+        half_size + normalized.x * half_size,
+        half_size - normalized.y * half_size,
+    )
 }
 
 fn button_color(action: UiButtonAction, interaction: Interaction, state: &UiGameState) -> Color {

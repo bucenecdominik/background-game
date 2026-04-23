@@ -3,19 +3,20 @@
 mod enemies;
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 use crate::ui::{GameMode, UiGameState};
 use enemies::EnemiesPlugin;
 
-const BACKGROUND_SIZE: Vec2 = Vec2::new(4096.0, 4096.0);
+pub const MAP_RADIUS: f32 = 3200.0;
+pub const PLAYER_COLLISION_RADIUS: f32 = 48.0;
+const BACKGROUND_PADDING: f32 = 640.0;
 const BACKGROUND_Z: f32 = -20.0;
 const STAR_Z: f32 = -19.0;
-const STAR_COUNT: usize = 260;
+const STAR_COUNT: usize = 420;
 const ARCADE_BACKGROUND_COLOR: Color = Color::BLACK;
+const MAP_BORDER_COLOR: Color = Color::srgba(0.96, 0.36, 0.34, 0.72);
 const PLAYER_SIZE: f32 = 110.0;
 const PLAYER_ASPECT_RATIO: f32 = 915.0 / 1437.0;
-const PLAYER_HALF_SIZE: f32 = PLAYER_SIZE / 2.0;
 const PLAYER_ACCELERATION: f32 = 560.0;
 const PLAYER_DECELERATION: f32 = 340.0;
 const PLAYER_LATERAL_DECELERATION: f32 = 720.0;
@@ -30,14 +31,34 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(EnemiesPlugin)
+        app.init_resource::<WorldMapState>()
+            .add_plugins(EnemiesPlugin)
             .add_systems(Startup, (spawn_arcade_background, spawn_player))
-            .add_systems(Update, (move_player, refresh_arcade_background));
+            .add_systems(
+                Update,
+                (
+                    move_player,
+                    follow_player_camera,
+                    refresh_arcade_background,
+                    draw_map_border,
+                ),
+            );
+    }
+}
+
+#[derive(Resource, Debug, Clone, Copy)]
+pub struct WorldMapState {
+    pub radius: f32,
+}
+
+impl Default for WorldMapState {
+    fn default() -> Self {
+        Self { radius: MAP_RADIUS }
     }
 }
 
 #[derive(Component)]
-struct Player;
+pub struct Player;
 
 #[derive(Component, Default)]
 struct Velocity(Vec3);
@@ -49,6 +70,8 @@ struct DashCooldown(f32);
 struct ArcadeBackground;
 
 fn spawn_arcade_background(mut commands: Commands) {
+    let background_size = Vec2::splat((MAP_RADIUS + BACKGROUND_PADDING) * 2.0);
+
     commands
         .spawn((
             ArcadeBackground,
@@ -61,7 +84,7 @@ fn spawn_arcade_background(mut commands: Commands) {
             background.spawn(SpriteBundle {
                 sprite: Sprite {
                     color: ARCADE_BACKGROUND_COLOR,
-                    custom_size: Some(BACKGROUND_SIZE),
+                    custom_size: Some(background_size),
                     ..default()
                 },
                 transform: Transform::from_xyz(0.0, 0.0, BACKGROUND_Z),
@@ -77,10 +100,15 @@ fn spawn_starfield(parent: &mut ChildBuilder) {
 
     for _ in 0..STAR_COUNT {
         let position = Vec3::new(
-            random.range(-BACKGROUND_SIZE.x / 2.0, BACKGROUND_SIZE.x / 2.0),
-            random.range(-BACKGROUND_SIZE.y / 2.0, BACKGROUND_SIZE.y / 2.0),
+            random.range(-MAP_RADIUS, MAP_RADIUS),
+            random.range(-MAP_RADIUS, MAP_RADIUS),
             STAR_Z + random.range(0.0, 0.6),
         );
+
+        if position.truncate().length() > MAP_RADIUS + BACKGROUND_PADDING * 0.75 {
+            continue;
+        }
+
         let size = random.range(1.0, 3.2);
         let brightness = random.range(0.45, 0.95);
 
@@ -151,14 +179,9 @@ fn refresh_arcade_background(
 fn move_player(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
     mut player_query: Query<(&mut Transform, &mut Velocity, &mut DashCooldown), With<Player>>,
 ) {
     let Ok((mut transform, mut velocity, mut dash_cooldown)) = player_query.get_single_mut() else {
-        return;
-    };
-
-    let Ok(window) = primary_window.get_single() else {
         return;
     };
 
@@ -177,7 +200,7 @@ fn move_player(
     }
 
     transform.translation += velocity.0 * delta_seconds;
-    clamp_player_to_window(&mut transform, &mut velocity, window);
+    clamp_player_to_map(&mut transform, &mut velocity);
 }
 
 fn tick_dash_cooldown(dash_cooldown: &mut DashCooldown, delta_seconds: f32) {
@@ -290,31 +313,48 @@ fn movement_direction(keyboard_input: &ButtonInput<KeyCode>) -> f32 {
     direction
 }
 
-fn clamp_player_to_window(transform: &mut Transform, velocity: &mut Velocity, window: &Window) {
-    let (_, _, rotation_z) = transform.rotation.to_euler(EulerRot::XYZ);
-    let (sin, cos) = rotation_z.sin_cos();
-    let rotated_extent = PLAYER_HALF_SIZE * (sin.abs() + cos.abs());
+fn clamp_player_to_map(transform: &mut Transform, velocity: &mut Velocity) {
+    let position = transform.translation.truncate();
+    let allowed_radius = MAP_RADIUS - PLAYER_COLLISION_RADIUS;
+    let distance = position.length();
 
-    let horizontal_limit = (window.resolution.width() / 2.0) - rotated_extent;
-    let vertical_limit = (window.resolution.height() / 2.0) - rotated_extent;
-
-    let clamped_x = transform
-        .translation
-        .x
-        .clamp(-horizontal_limit, horizontal_limit);
-    let clamped_y = transform
-        .translation
-        .y
-        .clamp(-vertical_limit, vertical_limit);
-
-    if clamped_x != transform.translation.x {
-        velocity.0.x = 0.0;
+    if distance <= allowed_radius || distance == 0.0 {
+        return;
     }
 
-    if clamped_y != transform.translation.y {
-        velocity.0.y = 0.0;
+    let normal = position / distance;
+    let clamped_position = normal * allowed_radius;
+    transform.translation.x = clamped_position.x;
+    transform.translation.y = clamped_position.y;
+
+    let outward_speed = velocity.0.truncate().dot(normal);
+    if outward_speed > 0.0 {
+        velocity.0.x -= normal.x * outward_speed;
+        velocity.0.y -= normal.y * outward_speed;
+    }
+}
+
+fn follow_player_camera(
+    player_query: Query<&Transform, (With<Player>, Changed<Transform>)>,
+    mut cameras: Query<&mut Transform, (With<Camera>, Without<Player>)>,
+) {
+    let Ok(player_transform) = player_query.get_single() else {
+        return;
+    };
+
+    for mut camera_transform in &mut cameras {
+        camera_transform.translation.x = player_transform.translation.x;
+        camera_transform.translation.y = player_transform.translation.y;
+    }
+}
+
+fn draw_map_border(
+    state: Res<UiGameState>,
+    mut gizmos: Gizmos,
+) {
+    if state.selected_mode != GameMode::Arcade {
+        return;
     }
 
-    transform.translation.x = clamped_x;
-    transform.translation.y = clamped_y;
+    gizmos.circle_2d(Vec2::ZERO, MAP_RADIUS, MAP_BORDER_COLOR);
 }
