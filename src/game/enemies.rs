@@ -85,6 +85,9 @@ struct DroneSwarmVisual {
 }
 
 #[derive(Component)]
+struct EnemyHealthBarRoot;
+
+#[derive(Component)]
 struct EnemyHealthBarFill;
 
 #[derive(Resource, Default)]
@@ -398,35 +401,40 @@ fn spawn_drone_swarm_wave(
 }
 
 fn spawn_enemy_health_bar(parent: &mut ChildBuilder) {
-    parent.spawn(SpriteBundle {
-        sprite: Sprite {
-            color: Color::srgba(0.05, 0.07, 0.11, 0.92),
-            custom_size: Some(Vec2::new(
-                ENEMY_HEALTH_BAR_WIDTH + 2.0,
-                ENEMY_HEALTH_BAR_HEIGHT + 2.0,
-            )),
-            ..default()
-        },
-        transform: Transform::from_xyz(0.0, ENEMY_HEALTH_BAR_Y_OFFSET, ENEMY_HEALTH_BAR_Z),
-        ..default()
-    });
-
-    parent.spawn((
-        EnemyHealthBarFill,
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgba(0.28, 0.96, 0.54, 0.94),
-                custom_size: Some(Vec2::new(ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT)),
+    parent
+        .spawn((
+            EnemyHealthBarRoot,
+            SpatialBundle {
+                transform: Transform::from_xyz(0.0, ENEMY_HEALTH_BAR_Y_OFFSET, ENEMY_HEALTH_BAR_Z),
                 ..default()
             },
-            transform: Transform::from_xyz(
-                0.0,
-                ENEMY_HEALTH_BAR_Y_OFFSET,
-                ENEMY_HEALTH_BAR_Z + 0.01,
-            ),
-            ..default()
-        },
-    ));
+        ))
+        .with_children(|bar_root| {
+            bar_root.spawn(SpriteBundle {
+                sprite: Sprite {
+                    color: Color::srgba(0.05, 0.07, 0.11, 0.92),
+                    custom_size: Some(Vec2::new(
+                        ENEMY_HEALTH_BAR_WIDTH + 2.0,
+                        ENEMY_HEALTH_BAR_HEIGHT + 2.0,
+                    )),
+                    ..default()
+                },
+                ..default()
+            });
+
+            bar_root.spawn((
+                EnemyHealthBarFill,
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: Color::srgba(0.28, 0.96, 0.54, 0.94),
+                        custom_size: Some(Vec2::new(ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT)),
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(0.0, 0.0, 0.01),
+                    ..default()
+                },
+            ));
+        });
 }
 
 fn move_drone_swarm(
@@ -646,14 +654,40 @@ fn despawn_destroyed_enemies(mut commands: Commands, enemies: Query<(Entity, &He
 fn update_enemy_health_bars(
     state: Res<UiGameState>,
     enemy_health: Query<&Health, With<Enemy>>,
-    mut bar_fills: Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
+    mut transforms: ParamSet<(
+        Query<(Entity, &Transform), With<Enemy>>,
+        Query<(&Parent, &mut Transform), With<EnemyHealthBarRoot>>,
+        Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
+    )>,
+    root_parents: Query<&Parent, With<EnemyHealthBarRoot>>,
 ) {
     if state.selected_mode != GameMode::Arcade {
         return;
     }
 
-    for (parent, mut sprite, mut transform) in &mut bar_fills {
-        let Ok(health) = enemy_health.get(parent.get()) else {
+    let enemy_rotations: Vec<_> = transforms
+        .p0()
+        .iter()
+        .map(|(entity, transform)| (entity, transform.rotation))
+        .collect();
+
+    for (parent, mut transform) in &mut transforms.p1() {
+        let Some((_, rotation)) = enemy_rotations
+            .iter()
+            .find(|(entity, _)| *entity == parent.get())
+        else {
+            continue;
+        };
+
+        transform.rotation = rotation.inverse();
+    }
+
+    for (parent, mut sprite, mut transform) in &mut transforms.p2() {
+        let Ok(root_parent) = root_parents.get(parent.get()) else {
+            continue;
+        };
+
+        let Ok(health) = enemy_health.get(root_parent.get()) else {
             continue;
         };
 
