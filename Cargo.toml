@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 bevy = { version = "0.14", default-features = true }
+bevy_winit = "0.14"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
