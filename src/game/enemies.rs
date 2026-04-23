@@ -47,6 +47,7 @@ impl Plugin for EnemiesPlugin {
                     spawn_drone_swarm_wave,
                     refresh_enemy_visibility,
                     move_drone_swarm,
+                    sync_drone_swarm_visuals.after(move_drone_swarm),
                     handle_projectile_enemy_collisions,
                     handle_enemy_player_collisions,
                     despawn_destroyed_enemies,
@@ -83,6 +84,9 @@ struct DroneSwarmVisual {
     base_rotation: f32,
     spin_speed: f32,
 }
+
+#[derive(Component)]
+struct DroneSwarmSprite;
 
 #[derive(Component)]
 struct EnemyHealthBarRoot;
@@ -386,19 +390,28 @@ fn spawn_drone_swarm_wave(
                     index + 1,
                     spec.role
                 )),
-                SpriteBundle {
-                    texture: variant.texture(&assets),
-                    sprite: Sprite {
-                        color: spec.color,
-                        custom_size: Some(variant.custom_size(spec.size)),
-                        ..default()
-                    },
-                    transform: Transform::from_xyz(position.x, position.y, ENEMY_Z)
-                        .with_rotation(Quat::from_rotation_z(base_rotation)),
+                SpatialBundle {
+                    transform: Transform::from_xyz(position.x, position.y, ENEMY_Z),
                     ..default()
                 },
             ))
-            .with_children(spawn_enemy_health_bar);
+            .with_children(|parent| {
+                parent.spawn((
+                    DroneSwarmSprite,
+                    SpriteBundle {
+                        texture: variant.texture(&assets),
+                        sprite: Sprite {
+                            color: spec.color,
+                            custom_size: Some(variant.custom_size(spec.size)),
+                            ..default()
+                        },
+                        transform: Transform::default()
+                            .with_rotation(Quat::from_rotation_z(base_rotation)),
+                        ..default()
+                    },
+                ));
+                spawn_enemy_health_bar(parent);
+            });
     }
 
     wave_state.spawned = true;
@@ -454,6 +467,7 @@ fn move_drone_swarm(
             (
                 Entity,
                 &mut Transform,
+                &Children,
                 &mut SwarmVelocity,
                 &mut DroneSwarmAgent,
                 &DroneSwarmVisual,
@@ -488,7 +502,7 @@ fn move_drone_swarm(
     let delta_seconds = time.delta_seconds();
     let player_position = player_transform.translation.truncate();
 
-    for (entity, mut transform, mut velocity, mut agent, visual, stats, health) in
+    for (entity, mut transform, children, mut velocity, mut agent, visual, stats, health) in
         &mut swarm_queries.p1()
     {
         let Some((_, current_position, current_velocity, wave_id)) = snapshots
@@ -578,7 +592,34 @@ fn move_drone_swarm(
             visual.base_rotation
         };
         agent.spin_angle += visual.spin_speed * delta_seconds;
-        transform.scale = Vec3::splat(0.94 + health_scale * 0.12);
+        let _ = (children, health_scale, movement_rotation);
+    }
+}
+
+fn sync_drone_swarm_visuals(
+    state: Res<UiGameState>,
+    enemy_visuals: Query<
+        (&SwarmVelocity, &DroneSwarmAgent, &DroneSwarmVisual, &Health),
+        (With<Enemy>, Without<DroneSwarmSprite>),
+    >,
+    mut sprite_transforms: Query<(&Parent, &mut Transform), With<DroneSwarmSprite>>,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    for (parent, mut transform) in &mut sprite_transforms {
+        let Ok((velocity, agent, visual, health)) = enemy_visuals.get(parent.get()) else {
+            continue;
+        };
+
+        let movement_rotation = if velocity.0.length_squared() > 0.0 {
+            velocity_to_angle(velocity.0)
+        } else {
+            visual.base_rotation
+        };
+
+        transform.scale = Vec3::splat(0.94 + health.ratio() * 0.12);
         transform.rotation = Quat::from_rotation_z(movement_rotation + agent.spin_angle);
     }
 }
@@ -659,8 +700,6 @@ fn update_enemy_health_bars(
     state: Res<UiGameState>,
     enemy_health: Query<&Health, With<Enemy>>,
     mut transforms: ParamSet<(
-        Query<(Entity, &Transform), With<Enemy>>,
-        Query<(&Parent, &mut Transform), With<EnemyHealthBarRoot>>,
         Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
     )>,
     root_parents: Query<&Parent, With<EnemyHealthBarRoot>>,
@@ -669,24 +708,7 @@ fn update_enemy_health_bars(
         return;
     }
 
-    let enemy_rotations: Vec<_> = transforms
-        .p0()
-        .iter()
-        .map(|(entity, transform)| (entity, transform.rotation))
-        .collect();
-
-    for (parent, mut transform) in &mut transforms.p1() {
-        let Some((_, rotation)) = enemy_rotations
-            .iter()
-            .find(|(entity, _)| *entity == parent.get())
-        else {
-            continue;
-        };
-
-        transform.rotation = rotation.inverse();
-    }
-
-    for (parent, mut sprite, mut transform) in &mut transforms.p2() {
+    for (parent, mut sprite, mut transform) in &mut transforms.p0() {
         let Ok(root_parent) = root_parents.get(parent.get()) else {
             continue;
         };
