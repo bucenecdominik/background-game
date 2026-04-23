@@ -1,113 +1,128 @@
 # Background Game
 
-Desktop overlay hra s transparentním pozadím pro krátké herní „mikro-session“ během čekání na dokončení práce agentů.
+Desktop overlay hra s transparentním pozadím pro krátké herní mikro-session během práce.
 
 ## O projektu
-**Background Game** je lehká desktopová hra běžící jako overlay nad pracovní plochou. Není to browserová hra — cíleně staví na Rustu a Bevy, aby byla rychlá, modulární a dlouhodobě udržitelná.
 
-Projekt je určený pro vývojáře a kreativce, kteří chtějí mít při práci puštěnou nenáročnou hru na pozadí (IDE, browser i nástroje pro agenty zůstávají viditelné).
+**Background Game** je lehká 2D hra běžící jako overlay nad pracovní plochou. Projekt staví na Rustu a Bevy, aby bylo možné postupně rozšiřovat gameplay logiku, UI i Windows overlay vrstvu bez velkého tření.
 
-## K čemu projekt slouží
-- Zábavný „idle / micro gameplay“ zážitek během čekání.
-- Overlay režim nad běžným workflow bez výrazného rušení.
-- Experimentální platforma pro kombinaci ECS gameplay logiky a Win32 integrace.
-- Základ pro postupné rozšiřování mechanik, UI i pluginů.
+Aktuální verze obsahuje transparentní always-on-top okno, ovládací UI panel, FPS panel, hráčovu loď a první implementovaný enemy typ `DroneSwarm`.
 
-## 🧠 Tech Stack
+## Ovládání
 
-### 🦀 Core
-- **Language:** Rust
-- **Game Engine:** Bevy
-- **Architecture:** ECS (Entity Component System)
+### Klávesnice
 
-### 🪟 Window & Overlay Layer
-- **Windowing (internal):** winit (přes Bevy)
-- **Windows API bindings:** `windows` crate
-- **Overlay features:**
-  - transparentní okno (alpha background)
-  - borderless okno
-  - always-on-top režim
-  - volitelný click-through (mouse passthrough)
-  - no-focus režim (hra nekrade focus z IDE)
+- `W` pohyb vpřed ve směru natočení lodi
+- `S` pohyb vzad
+- `A` rotace doleva
+- `D` rotace doprava
+- `C` dash vpřed s krátkým cooldownem
+- `Escape` ukončí hru
 
-### 🎮 Rendering & Game Layer
-- **Renderer:** wgpu (přes Bevy)
-- **Graphics:** 2D (sprite-based)
-- **UI:** Bevy UI systém
-- **Camera:** Orthographic (2D overlay)
+### UI panel
 
-## 📦 Dependencies (Cargo)
+- `2D Arcade`, `2D Side-Scrolling`, `Idle Overlay` přepínají herní režim
+- `New Game` vrátí běh hry do pauzy
+- `Start` spustí gameplay; po spuštění se změní na `Pause`
+- `Pause` zastaví běh hry
+- `X` zavře aplikaci
+
+## Herní režimy
+
+- **2D Arcade** je aktuálně hlavní režim. Zobrazuje hvězdné pozadí, hráče a po stisknutí `Start` aktivuje enemy vlnu.
+- **2D Side-Scrolling** je připravený v UI, ale gameplay pro něj zatím není implementovaný.
+- **Idle Overlay** je připravený v UI pro budoucí background režim.
+
+## Enemy systém
+
+Enemy systém je rozdělený do samostatného modulu a aktuálně obsahuje první reálně fungující typ `DroneSwarm`. Ostatní enemy typy jsou zatím jen připravené v datech pro další iterace.
+
+### Drone Swarm
+
+- spawnne se jako jedna vlna o `3` až `6` dronech
+- přilétá těsně mimo viditelnou plochu
+- používá 3 sprite varianty:
+  - `drone-swarm-left.png`
+  - `drone-swarm-center.png`
+  - `drone-swarm-right.png`
+- každá entita ve swarmu má základní velikost `30x30 px`, varianty se od ní mírně škálují
+- všechny drony automaticky letí směrem k hráči
+- swarm používá seek, cohesion, alignment a separaci, aby držel roj a co nejméně se srážel
+- pravá varianta má permanentní rotaci po směru hodinových ručiček
+
+### Připravené další typy
+
+- `KamikazeDrone`
+- `ShieldCarrier`
+- `TurretDrone`
+- `PhaseJumper`
+- `GravityDrone`
+- `Splitter`
+- `FlameChaser`
+- `SniperEye`
+- `OverlordCore`
+
+## Tech Stack
+
+- **Language:** Rust 2021
+- **Game engine:** Bevy `0.14`
+- **Windowing:** `bevy_winit`
+- **Platform handles:** `raw-window-handle`
+- **Windows API bindings:** `windows-sys`
+- **Architecture:** ECS přes Bevy pluginy, komponenty a systémy
+
+Aktuální Cargo dependencies:
+
 ```toml
 [dependencies]
-bevy = "0.13"         # game engine
-windows = "0.56"      # Win32 API (overlay tweaks)
+bevy = { version = "0.14", default-features = true }
+bevy_winit = "0.14"
+raw-window-handle = "0.6"
+windows-sys = { version = "0.52", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 ```
 
-Volitelné (podle potřeby):
+## Build & Run
 
-```toml
-bevy_tweening = "0.10"   # animace
-bevy_kira_audio = "0.18" # audio
-rand = "0.8"             # náhoda
+```powershell
+cargo build
+cargo run
+cargo check
 ```
 
-## ⚙️ Build & Tooling
-- **Package manager:** Cargo
-- **Build / Run:** `cargo build`, `cargo run`
-- **Hot reload (assets):** Bevy asset systém
-- **Formatting:** rustfmt
-- **Linting:** clippy
+## Struktura projektu
 
-## 🧩 Platform Target
-- **OS:** Windows
-- **Graphics API:** DirectX 12 / Vulkan (přes wgpu)
-- **Window type:** Layered / transparent desktop overlay
-
-## 🧠 Key Features
-- Běh jako desktop overlay hra.
-- Plně transparentní pozadí.
-- Neblokuje workflow (agenti, IDE, browser zůstávají viditelné).
-- Nízká zátěž CPU/GPU.
-- Design pro idle/micro gameplay smyčky.
-
-## 🏗️ Project Structure
 ```text
 src/
- ├── main.rs          # app entrypoint
- ├── game/            # gameplay logika (systems, components)
- ├── ui/              # UI systémy
- ├── overlay/         # window + Win32 úpravy
- └── plugins/         # Bevy pluginy
+  main.rs          # App entrypoint
+  game/            # Gameplay logika, hráč, pozadí, enemies
+  ui/              # Bevy UI panel a UI stav hry
+  overlay/         # Window setup a Win32 overlay úpravy
+  plugins/         # Hlavní plugin wiring
 
 assets/
- ├── sprites/
- ├── audio/
- └── fonts/
+  sprites/         # Sprite assety včetně Drone Swarm variant
 ```
 
-## 🚀 Dev Philosophy
-- Minimal friction (rychlá iterace).
-- „Always running“ background experience.
-- Design pro vibe coding + AI-assisted development.
-- Striktní separace zodpovědností:
-  - rendering (Bevy)
-  - OS integrace (`windows` crate)
-  - gameplay logika (ECS systems)
+## Poznámky k overlay režimu
 
-## ⚠️ Poznámky
-- Transparentní okno není automaticky click-through — řeší se přes Win32.
-- Overlay nemusí fungovat nad aplikacemi v exclusive fullscreen režimu.
-- Výkon je laděný pro background usage (nižší FPS může být akceptovatelné).
+- okno je borderless, transparentní a always-on-top
+- transparentní pozadí používá Win32 layered-window color key
+- overlay nemusí fungovat stejně nad aplikacemi v exclusive fullscreen režimu
+- projekt cílí primárně na Windows
 
 ## Roadmapa
-- [ ] Inicializace Rust + Bevy projektu
-- [ ] Základní transparentní overlay okno pro Windows
-- [ ] První hratelná idle mechanika
-- [ ] Nízkopříkonový update loop a optimalizace
-- [ ] Rozšíření UI a plugin architektury
+
+- [x] Inicializace Rust + Bevy projektu
+- [x] Transparentní overlay okno pro Windows
+- [x] Ovládací UI panel a FPS panel
+- [x] Hráčova loď s rotací, akcelerací a dashem
+- [x] Základní enemy systém
+- [x] První implementovaný enemy `DroneSwarm`
+- [ ] Kolize, poškození a health systém
+- [ ] Další enemy AI a odlišná chování
+- [ ] Více vln, spawn pravidla a progres obtížnosti
+- [ ] Audio, efekty a finální assety
 
 ## Licence
-Prozatím není specifikována. Doporučeno doplnit před veřejným vydáním.
 
-## Autor
-Doplňte jméno/autorský tým projektu.
+Licence zatím není specifikovaná.

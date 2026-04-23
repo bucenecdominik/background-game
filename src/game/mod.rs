@@ -1,9 +1,12 @@
 //! Game domain module.
 
+mod enemies;
+
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::ui::{GameMode, UiGameState};
+use enemies::EnemiesPlugin;
 
 const BACKGROUND_SIZE: Vec2 = Vec2::new(4096.0, 4096.0);
 const BACKGROUND_Z: f32 = -20.0;
@@ -27,7 +30,8 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, (spawn_arcade_background, spawn_player))
+        app.add_plugins(EnemiesPlugin)
+            .add_systems(Startup, (spawn_arcade_background, spawn_player))
             .add_systems(Update, (move_player, refresh_arcade_background));
     }
 }
