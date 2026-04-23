@@ -11,6 +11,7 @@ const STAR_Z: f32 = -19.0;
 const STAR_COUNT: usize = 260;
 const ARCADE_BACKGROUND_COLOR: Color = Color::BLACK;
 const PLAYER_SIZE: f32 = 110.0;
+const PLAYER_ASPECT_RATIO: f32 = 915.0 / 1437.0;
 const PLAYER_HALF_SIZE: f32 = PLAYER_SIZE / 2.0;
 const PLAYER_ACCELERATION: f32 = 560.0;
 const PLAYER_DECELERATION: f32 = 340.0;
@@ -20,7 +21,7 @@ const PLAYER_ROTATION_SPEED: f32 = std::f32::consts::PI;
 const PLAYER_DASH_SPEED: f32 = 980.0;
 const PLAYER_DASH_DECELERATION: f32 = 760.0;
 const PLAYER_DASH_COOLDOWN_SECONDS: f32 = 0.55;
-const PLAYER_SPRITE: &str = "sprites/fighter.png";
+const PLAYER_SPRITE: &str = "sprites/ally-jet.png";
 
 pub struct GamePlugin;
 
@@ -116,7 +117,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
         SpriteBundle {
             texture: asset_server.load(PLAYER_SPRITE),
             sprite: Sprite {
-                custom_size: Some(Vec2::splat(PLAYER_SIZE)),
+                custom_size: Some(Vec2::new(PLAYER_SIZE * PLAYER_ASPECT_RATIO, PLAYER_SIZE)),
                 ..default()
             },
             ..default()
