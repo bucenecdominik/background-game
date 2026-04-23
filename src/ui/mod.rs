@@ -51,17 +51,20 @@ impl Plugin for UiPlugin {
                     spawn_fps_counter,
                     spawn_minimap,
                     spawn_player_health_panel,
+                    spawn_defeat_overlay,
                 ),
             )
             .add_systems(
                 Update,
                 (
+                    detect_player_defeat,
                     handle_keyboard_exit,
                     handle_ui_buttons,
                     refresh_ui_buttons,
                     refresh_fps_counter,
                     refresh_minimap,
                     refresh_player_health_panel,
+                    refresh_defeat_overlay,
                 ),
             );
     }
@@ -71,6 +74,7 @@ impl Plugin for UiPlugin {
 pub struct UiGameState {
     pub selected_mode: GameMode,
     pub is_running: bool,
+    pub is_defeated: bool,
 }
 
 impl Default for UiGameState {
@@ -78,6 +82,7 @@ impl Default for UiGameState {
         Self {
             selected_mode: GameMode::Arcade,
             is_running: false,
+            is_defeated: false,
         }
     }
 }
@@ -128,6 +133,12 @@ struct PlayerHealthFill;
 
 #[derive(Component)]
 struct PlayerHealthLabel;
+
+#[derive(Component)]
+struct DefeatOverlayRoot;
+
+#[derive(Component)]
+struct DefeatOverlayLabel;
 
 fn spawn_top_bar(mut commands: Commands) {
     commands
@@ -318,6 +329,66 @@ fn spawn_player_health_panel(mut commands: Commands) {
                             ..default()
                         },
                         PlayerHealthFill,
+                    ));
+                });
+        });
+}
+
+fn spawn_defeat_overlay(mut commands: Commands) {
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    width: Val::Percent(100.0),
+                    height: Val::Percent(100.0),
+                    align_items: AlignItems::Center,
+                    justify_content: JustifyContent::Center,
+                    ..default()
+                },
+                visibility: Visibility::Hidden,
+                background_color: Color::srgba(0.01, 0.02, 0.05, 0.78).into(),
+                z_index: ZIndex::Global(30),
+                ..default()
+            },
+            DefeatOverlayRoot,
+        ))
+        .with_children(|overlay| {
+            overlay
+                .spawn(NodeBundle {
+                    style: Style {
+                        padding: UiRect::axes(Val::Px(28.0), Val::Px(22.0)),
+                        flex_direction: FlexDirection::Column,
+                        row_gap: Val::Px(10.0),
+                        align_items: AlignItems::Center,
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    background_color: Color::srgba(0.06, 0.08, 0.14, 0.98).into(),
+                    border_color: Color::srgba(0.92, 0.28, 0.26, 0.88).into(),
+                    border_radius: BorderRadius::all(Val::Px(18.0)),
+                    ..default()
+                })
+                .with_children(|panel| {
+                    panel.spawn(TextBundle::from_section(
+                        "DEFEAT",
+                        TextStyle {
+                            font_size: 34.0,
+                            color: Color::srgb(1.0, 0.33, 0.3),
+                            ..default()
+                        },
+                    ));
+
+                    panel.spawn((
+                        TextBundle::from_section(
+                            "Press New Game, then Start to play again.",
+                            TextStyle {
+                                font_size: 16.0,
+                                color: TEXT_PRIMARY,
+                                ..default()
+                            },
+                        ),
+                        DefeatOverlayLabel,
                     ));
                 });
         });
@@ -586,13 +657,42 @@ fn handle_ui_buttons(
         }
 
         match action {
-            UiButtonAction::SelectMode(mode) => state.selected_mode = *mode,
-            UiButtonAction::NewGame => state.is_running = false,
-            UiButtonAction::ToggleRunning => state.is_running = !state.is_running,
+            UiButtonAction::SelectMode(mode) => {
+                state.selected_mode = *mode;
+                state.is_running = false;
+                state.is_defeated = false;
+            }
+            UiButtonAction::NewGame => {
+                state.is_running = false;
+                state.is_defeated = false;
+            }
+            UiButtonAction::ToggleRunning => {
+                if !state.is_defeated {
+                    state.is_running = !state.is_running;
+                }
+            }
             UiButtonAction::ExitGame => {
                 exit.send(AppExit::Success);
             }
         }
+    }
+}
+
+fn detect_player_defeat(
+    mut state: ResMut<UiGameState>,
+    player_query: Query<&Health, With<Player>>,
+) {
+    if state.selected_mode != GameMode::Arcade || state.is_defeated {
+        return;
+    }
+
+    let Ok(health) = player_query.get_single() else {
+        return;
+    };
+
+    if health.current <= 0.0 {
+        state.is_running = false;
+        state.is_defeated = true;
     }
 }
 
@@ -622,7 +722,9 @@ fn refresh_ui_buttons(
     }
 
     for mut text in &mut start_labels {
-        text.sections[0].value = if state.is_running {
+        text.sections[0].value = if state.is_defeated {
+            "Start".into()
+        } else if state.is_running {
             "Pause".into()
         } else {
             "Start".into()
@@ -720,6 +822,31 @@ fn refresh_player_health_panel(
     }
 }
 
+fn refresh_defeat_overlay(
+    state: Res<UiGameState>,
+    mut overlays: Query<&mut Visibility, With<DefeatOverlayRoot>>,
+    mut labels: Query<&mut Text, With<DefeatOverlayLabel>>,
+) {
+    let show_defeat = state.selected_mode == GameMode::Arcade && state.is_defeated;
+    let visibility = if show_defeat {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+
+    for mut overlay_visibility in &mut overlays {
+        *overlay_visibility = visibility;
+    }
+
+    for mut text in &mut labels {
+        text.sections[0].value = if show_defeat {
+            "Press New Game, then Start to play again.".into()
+        } else {
+            String::new()
+        };
+    }
+}
+
 fn world_to_minimap(world_position: Vec2, map_radius: f32, minimap_size: f32) -> Vec2 {
     let normalized = (world_position / map_radius).clamp_length_max(1.0);
     let half_size = minimap_size / 2.0;
@@ -731,6 +858,10 @@ fn world_to_minimap(world_position: Vec2, map_radius: f32, minimap_size: f32) ->
 }
 
 fn button_color(action: UiButtonAction, interaction: Interaction, state: &UiGameState) -> Color {
+    if matches!(action, UiButtonAction::ToggleRunning) && state.is_defeated {
+        return Color::srgba(0.2, 0.23, 0.28, 0.92);
+    }
+
     if interaction == Interaction::Pressed {
         return match action {
             UiButtonAction::NewGame => ACTION_PRESSED_BACKGROUND,
@@ -770,6 +901,10 @@ fn button_color(action: UiButtonAction, interaction: Interaction, state: &UiGame
 }
 
 fn border_color(action: UiButtonAction, interaction: Interaction, state: &UiGameState) -> Color {
+    if matches!(action, UiButtonAction::ToggleRunning) && state.is_defeated {
+        return Color::srgba(0.3, 0.35, 0.42, 0.72);
+    }
+
     if interaction == Interaction::Hovered || interaction == Interaction::Pressed {
         return Color::srgba(0.75, 0.92, 1.0, 0.92);
     }

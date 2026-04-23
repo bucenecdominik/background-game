@@ -257,7 +257,11 @@ fn reset_combat_state(
     >,
     projectiles: Query<Entity, With<Projectile>>,
 ) {
-    if !state.is_changed() || (state.selected_mode == GameMode::Arcade && state.is_running) {
+    let should_reset = state.is_changed()
+        && (!state.is_defeated || state.selected_mode != GameMode::Arcade)
+        && !(state.selected_mode == GameMode::Arcade && state.is_running);
+
+    if !should_reset {
         return;
     }
 
