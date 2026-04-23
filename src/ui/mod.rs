@@ -1,10 +1,12 @@
 //! UI module.
 
+use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
 const TOP_BAR_HEIGHT: f32 = 126.0;
 const TOP_BAR_WIDTH: f32 = 456.0;
 const TOP_BAR_MARGIN: f32 = 6.0;
+const FPS_PANEL_MARGIN: f32 = 12.0;
 const BAR_BACKGROUND: Color = Color::srgba(0.02, 0.035, 0.07, 0.94);
 const PANEL_BACKGROUND: Color = Color::srgba(0.05, 0.075, 0.13, 0.96);
 const BUTTON_BACKGROUND: Color = Color::srgba(0.09, 0.13, 0.2, 0.98);
@@ -30,10 +32,15 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiGameState>()
-            .add_systems(Startup, spawn_top_bar)
+            .add_systems(Startup, (spawn_top_bar, spawn_fps_counter))
             .add_systems(
                 Update,
-                (handle_keyboard_exit, handle_ui_buttons, refresh_ui_buttons),
+                (
+                    handle_keyboard_exit,
+                    handle_ui_buttons,
+                    refresh_ui_buttons,
+                    refresh_fps_counter,
+                ),
             );
     }
 }
@@ -84,6 +91,9 @@ struct StartPauseLabel;
 #[derive(Component)]
 struct ModeStatusLabel;
 
+#[derive(Component)]
+struct FpsLabel;
+
 fn spawn_top_bar(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -122,6 +132,38 @@ fn spawn_top_bar(mut commands: Commands) {
                 spawn_header_row(bar);
                 spawn_action_row(bar);
             });
+        });
+}
+
+fn spawn_fps_counter(mut commands: Commands) {
+    commands
+        .spawn(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                top: Val::Px(FPS_PANEL_MARGIN),
+                left: Val::Px(FPS_PANEL_MARGIN),
+                padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
+                border: UiRect::all(Val::Px(1.0)),
+                ..default()
+            },
+            background_color: PANEL_BACKGROUND.into(),
+            border_color: Color::srgba(0.28, 0.38, 0.52, 0.75).into(),
+            border_radius: BorderRadius::all(Val::Px(12.0)),
+            z_index: ZIndex::Global(11),
+            ..default()
+        })
+        .with_children(|panel| {
+            panel.spawn((
+                TextBundle::from_section(
+                    "FPS: --",
+                    TextStyle {
+                        font_size: 13.0,
+                        color: TEXT_PRIMARY,
+                        ..default()
+                    },
+                ),
+                FpsLabel,
+            ));
         });
 }
 
@@ -437,6 +479,22 @@ fn refresh_ui_buttons(
 
     for mut text in &mut mode_labels {
         text.sections[0].value = format!("Mode: {}", state.selected_mode.label());
+    }
+}
+
+fn refresh_fps_counter(
+    diagnostics: Res<DiagnosticsStore>,
+    mut labels: Query<&mut Text, With<FpsLabel>>,
+) {
+    let Some(fps) = diagnostics
+        .get(&FrameTimeDiagnosticsPlugin::FPS)
+        .and_then(|fps| fps.smoothed())
+    else {
+        return;
+    };
+
+    for mut text in &mut labels {
+        text.sections[0].value = format!("FPS: {fps:.0}");
     }
 }
 

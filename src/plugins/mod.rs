@@ -1,5 +1,6 @@
 //! Application plugin wiring.
 
+use bevy::diagnostic::FrameTimeDiagnosticsPlugin;
 use bevy::prelude::*;
 
 use crate::game::GamePlugin;
@@ -9,7 +10,7 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((UiPlugin, GamePlugin))
+        app.add_plugins((FrameTimeDiagnosticsPlugin, UiPlugin, GamePlugin))
             .add_systems(Startup, spawn_camera);
     }
 }
