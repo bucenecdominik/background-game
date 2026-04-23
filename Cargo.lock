@@ -293,9 +293,6 @@ name = "background-game"
 version = "0.1.0"
 dependencies = [
  "bevy",
- "bevy_winit",
- "raw-window-handle",
- "windows-sys 0.52.0",
 ]
 
 [[package]]
