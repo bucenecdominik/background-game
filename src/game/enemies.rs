@@ -2,10 +2,17 @@
 
 use bevy::prelude::*;
 
-use super::Player;
+use super::{
+    player_contact_damage_fraction, player_contact_invulnerability_seconds, ContactCooldown,
+    Health, Player, Projectile, PLAYER_COLLISION_RADIUS,
+};
 use crate::ui::{GameMode, UiGameState};
 
 const ENEMY_Z: f32 = 2.0;
+const ENEMY_HEALTH_BAR_Z: f32 = 0.1;
+const ENEMY_HEALTH_BAR_WIDTH: f32 = 34.0;
+const ENEMY_HEALTH_BAR_HEIGHT: f32 = 5.0;
+const ENEMY_HEALTH_BAR_Y_OFFSET: f32 = -30.0;
 const DRONE_SWARM_MIN_COUNT: usize = 3;
 const DRONE_SWARM_MAX_COUNT: usize = 6;
 const DRONE_SWARM_BASE_SPEED: f32 = 175.0;
@@ -36,9 +43,14 @@ impl Plugin for EnemiesPlugin {
             .add_systems(
                 Update,
                 (
+                    reset_enemy_state,
                     spawn_drone_swarm_wave,
                     refresh_enemy_visibility,
                     move_drone_swarm,
+                    handle_projectile_enemy_collisions,
+                    handle_enemy_player_collisions,
+                    despawn_destroyed_enemies,
+                    update_enemy_health_bars,
                 ),
             );
     }
@@ -51,9 +63,9 @@ pub struct Enemy {
 
 #[derive(Component, Debug, Clone, Copy)]
 pub struct EnemyStats {
-    pub health: f32,
     pub speed: f32,
     pub contact_damage: f32,
+    pub collision_radius: f32,
 }
 
 #[derive(Component, Debug, Clone, Copy)]
@@ -71,6 +83,12 @@ struct DroneSwarmVisual {
     base_rotation: f32,
     spin_speed: f32,
 }
+
+#[derive(Component)]
+struct EnemyHealthBarRoot;
+
+#[derive(Component)]
+struct EnemyHealthBarFill;
 
 #[derive(Resource, Default)]
 struct EnemyWaveState {
@@ -284,6 +302,23 @@ pub struct EnemySpec {
     pub color: Color,
 }
 
+fn reset_enemy_state(
+    mut commands: Commands,
+    state: Res<UiGameState>,
+    mut wave_state: ResMut<EnemyWaveState>,
+    enemies: Query<Entity, With<Enemy>>,
+) {
+    if !state.is_changed() || (state.selected_mode == GameMode::Arcade && state.is_running) {
+        return;
+    }
+
+    wave_state.spawned = false;
+
+    for entity in &enemies {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
 fn spawn_drone_swarm_wave(
     mut commands: Commands,
     state: Res<UiGameState>,
@@ -308,6 +343,7 @@ fn spawn_drone_swarm_wave(
     let spawn_center = random_spawn_center(&mut random, player_position);
     let tangent = tangent_for_spawn(spawn_center - player_position).normalize_or_zero();
     let spec = EnemyKind::DroneSwarm.spec();
+    let collision_radius = spec.size.max_element() * 0.72;
 
     for index in 0..count {
         let slot_offset = index as f32 - (count.saturating_sub(1) as f32 / 2.0);
@@ -319,46 +355,86 @@ fn spawn_drone_swarm_wave(
         let facing = (player_position - position).normalize_or_zero();
         let base_rotation = velocity_to_angle(facing);
 
-        commands.spawn((
-            Enemy {
-                kind: EnemyKind::DroneSwarm,
-            },
-            EnemyStats {
-                health: spec.health,
-                speed: spec.speed,
-                contact_damage: spec.contact_damage,
-            },
-            DroneSwarmAgent {
-                variant,
-                wave_id,
-                spin_angle: 0.0,
-            },
-            DroneSwarmVisual {
-                base_rotation,
-                spin_speed: variant.spin_speed(),
-            },
-            SwarmVelocity(facing * spec.speed),
-            Name::new(format!(
-                "{} {} - {}",
-                spec.display_name,
-                index + 1,
-                spec.role
-            )),
-            SpriteBundle {
-                texture: variant.texture(&assets),
-                sprite: Sprite {
-                    color: spec.color,
-                    custom_size: Some(variant.custom_size(spec.size)),
+        commands
+            .spawn((
+                Enemy {
+                    kind: EnemyKind::DroneSwarm,
+                },
+                Health::full(spec.health),
+                EnemyStats {
+                    speed: spec.speed,
+                    contact_damage: spec.contact_damage,
+                    collision_radius,
+                },
+                DroneSwarmAgent {
+                    variant,
+                    wave_id,
+                    spin_angle: 0.0,
+                },
+                DroneSwarmVisual {
+                    base_rotation,
+                    spin_speed: variant.spin_speed(),
+                },
+                SwarmVelocity(facing * spec.speed),
+                Name::new(format!(
+                    "{} {} - {}",
+                    spec.display_name,
+                    index + 1,
+                    spec.role
+                )),
+                SpriteBundle {
+                    texture: variant.texture(&assets),
+                    sprite: Sprite {
+                        color: spec.color,
+                        custom_size: Some(variant.custom_size(spec.size)),
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(position.x, position.y, ENEMY_Z)
+                        .with_rotation(Quat::from_rotation_z(base_rotation)),
                     ..default()
                 },
-                transform: Transform::from_xyz(position.x, position.y, ENEMY_Z)
-                    .with_rotation(Quat::from_rotation_z(base_rotation)),
-                ..default()
-            },
-        ));
+            ))
+            .with_children(spawn_enemy_health_bar);
     }
 
     wave_state.spawned = true;
+}
+
+fn spawn_enemy_health_bar(parent: &mut ChildBuilder) {
+    parent
+        .spawn((
+            EnemyHealthBarRoot,
+            SpatialBundle {
+                transform: Transform::from_xyz(0.0, ENEMY_HEALTH_BAR_Y_OFFSET, ENEMY_HEALTH_BAR_Z),
+                ..default()
+            },
+        ))
+        .with_children(|bar_root| {
+            bar_root.spawn(SpriteBundle {
+                sprite: Sprite {
+                    color: Color::srgba(0.05, 0.07, 0.11, 0.92),
+                    custom_size: Some(Vec2::new(
+                        ENEMY_HEALTH_BAR_WIDTH + 2.0,
+                        ENEMY_HEALTH_BAR_HEIGHT + 2.0,
+                    )),
+                    ..default()
+                },
+                ..default()
+            });
+
+            bar_root.spawn((
+                EnemyHealthBarFill,
+                SpriteBundle {
+                    sprite: Sprite {
+                        color: Color::srgba(0.28, 0.96, 0.54, 0.94),
+                        custom_size: Some(Vec2::new(ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT)),
+                        ..default()
+                    },
+                    transform: Transform::from_xyz(0.0, 0.0, 0.01),
+                    ..default()
+                },
+            ));
+        });
 }
 
 fn move_drone_swarm(
@@ -378,6 +454,7 @@ fn move_drone_swarm(
                 &mut DroneSwarmAgent,
                 &DroneSwarmVisual,
                 &EnemyStats,
+                &Health,
             ),
             (With<Enemy>, Without<Player>),
         >,
@@ -407,7 +484,9 @@ fn move_drone_swarm(
     let delta_seconds = time.delta_seconds();
     let player_position = player_transform.translation.truncate();
 
-    for (entity, mut transform, mut velocity, mut agent, visual, stats) in &mut swarm_queries.p1() {
+    for (entity, mut transform, mut velocity, mut agent, visual, stats, health) in
+        &mut swarm_queries.p1()
+    {
         let Some((_, current_position, current_velocity, wave_id)) = snapshots
             .iter()
             .copied()
@@ -469,7 +548,7 @@ fn move_drone_swarm(
 
         let steering = seek + cohesion + alignment + separation;
         let aggression_boost = stats.contact_damage * 0.65;
-        let health_scale = (stats.health / 100.0).clamp(0.0, 1.0);
+        let health_scale = health.ratio();
         let desired_velocity = steering.normalize_or_zero()
             * (stats.speed + aggression_boost + randomish_speed_offset(entity.index()));
         let velocity_delta = desired_velocity - current_velocity;
@@ -497,6 +576,132 @@ fn move_drone_swarm(
         agent.spin_angle += visual.spin_speed * delta_seconds;
         transform.scale = Vec3::splat(0.94 + health_scale * 0.12);
         transform.rotation = Quat::from_rotation_z(movement_rotation + agent.spin_angle);
+    }
+}
+
+fn handle_projectile_enemy_collisions(
+    mut commands: Commands,
+    state: Res<UiGameState>,
+    mut enemies: Query<(Entity, &Transform, &EnemyStats, &mut Health), With<Enemy>>,
+    projectiles: Query<(Entity, &Transform, &Projectile)>,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    for (projectile_entity, projectile_transform, projectile) in &projectiles {
+        let projectile_position = projectile_transform.translation.truncate();
+        let mut hit_enemy = None;
+
+        for (enemy_entity, enemy_transform, stats, health) in &mut enemies {
+            let enemy_position = enemy_transform.translation.truncate();
+            let collision_distance = projectile.radius + stats.collision_radius;
+
+            if projectile_position.distance(enemy_position) <= collision_distance {
+                hit_enemy = Some((enemy_entity, health));
+                break;
+            }
+        }
+
+        if let Some((_enemy_entity, mut health)) = hit_enemy {
+            health.damage_fraction(projectile.damage_fraction);
+            commands.entity(projectile_entity).despawn_recursive();
+        }
+    }
+}
+
+fn handle_enemy_player_collisions(
+    state: Res<UiGameState>,
+    enemy_query: Query<(&Transform, &EnemyStats), With<Enemy>>,
+    mut player_query: Query<(&Transform, &mut Health, &mut ContactCooldown), With<Player>>,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    let Ok((player_transform, mut player_health, mut contact_cooldown)) =
+        player_query.get_single_mut()
+    else {
+        return;
+    };
+
+    if contact_cooldown.0 > 0.0 {
+        return;
+    }
+
+    let player_position = player_transform.translation.truncate();
+
+    for (enemy_transform, enemy_stats) in &enemy_query {
+        let enemy_position = enemy_transform.translation.truncate();
+        let collision_distance = PLAYER_COLLISION_RADIUS + enemy_stats.collision_radius;
+
+        if player_position.distance(enemy_position) <= collision_distance {
+            player_health.damage_fraction(player_contact_damage_fraction());
+            contact_cooldown.0 = player_contact_invulnerability_seconds();
+            break;
+        }
+    }
+}
+
+fn despawn_destroyed_enemies(mut commands: Commands, enemies: Query<(Entity, &Health), With<Enemy>>) {
+    for (entity, health) in &enemies {
+        if health.current <= 0.0 {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
+}
+
+fn update_enemy_health_bars(
+    state: Res<UiGameState>,
+    enemy_health: Query<&Health, With<Enemy>>,
+    mut transforms: ParamSet<(
+        Query<(Entity, &Transform), With<Enemy>>,
+        Query<(&Parent, &mut Transform), With<EnemyHealthBarRoot>>,
+        Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
+    )>,
+    root_parents: Query<&Parent, With<EnemyHealthBarRoot>>,
+) {
+    if state.selected_mode != GameMode::Arcade {
+        return;
+    }
+
+    let enemy_rotations: Vec<_> = transforms
+        .p0()
+        .iter()
+        .map(|(entity, transform)| (entity, transform.rotation))
+        .collect();
+
+    for (parent, mut transform) in &mut transforms.p1() {
+        let Some((_, rotation)) = enemy_rotations
+            .iter()
+            .find(|(entity, _)| *entity == parent.get())
+        else {
+            continue;
+        };
+
+        transform.rotation = rotation.inverse();
+    }
+
+    for (parent, mut sprite, mut transform) in &mut transforms.p2() {
+        let Ok(root_parent) = root_parents.get(parent.get()) else {
+            continue;
+        };
+
+        let Ok(health) = enemy_health.get(root_parent.get()) else {
+            continue;
+        };
+
+        let fill_ratio = health.ratio();
+        let width = ENEMY_HEALTH_BAR_WIDTH * fill_ratio.max(0.0);
+        sprite.custom_size = Some(Vec2::new(width, ENEMY_HEALTH_BAR_HEIGHT));
+        sprite.color = if fill_ratio > 0.5 {
+            Color::srgba(0.28, 0.96, 0.54, 0.94)
+        } else if fill_ratio > 0.25 {
+            Color::srgba(1.0, 0.82, 0.24, 0.94)
+        } else {
+            Color::srgba(0.98, 0.34, 0.32, 0.94)
+        };
+        transform.translation.x = -(ENEMY_HEALTH_BAR_WIDTH - width) * 0.5;
     }
 }
 

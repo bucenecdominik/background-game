@@ -25,6 +25,17 @@ const PLAYER_ROTATION_SPEED: f32 = std::f32::consts::PI;
 const PLAYER_DASH_SPEED: f32 = 980.0;
 const PLAYER_DASH_DECELERATION: f32 = 760.0;
 const PLAYER_DASH_COOLDOWN_SECONDS: f32 = 0.55;
+const PLAYER_CONTACT_INVULNERABILITY_SECONDS: f32 = 0.45;
+const PLAYER_MAX_HEALTH: f32 = 100.0;
+const PROJECTILE_SPEED: f32 = 1160.0;
+const PROJECTILE_LIFETIME_SECONDS: f32 = 1.45;
+const PROJECTILE_RADIUS: f32 = 12.0;
+const PROJECTILE_SIZE: Vec2 = Vec2::new(12.0, 28.0);
+const PROJECTILE_FIRE_INTERVAL_SECONDS: f32 = 0.16;
+const PROJECTILE_SPAWN_OFFSET: f32 = 74.0;
+const PROJECTILE_DAMAGE_FRACTION: f32 = 0.20;
+const PLAYER_CONTACT_DAMAGE_FRACTION: f32 = 0.10;
+const PROJECTILE_Z: f32 = 1.8;
 const PLAYER_SPRITE: &str = "sprites/ally-jet.png";
 
 pub struct GamePlugin;
@@ -37,11 +48,17 @@ impl Plugin for GamePlugin {
             .add_systems(
                 Update,
                 (
+                    reset_combat_state,
                     move_player,
+                    tick_contact_cooldown,
+                    fire_player_projectiles,
+                    move_projectiles,
+                    cleanup_projectiles,
                     follow_player_camera,
                     refresh_arcade_background,
                     draw_map_border,
-                ),
+                )
+                    .chain(),
             );
     }
 }
@@ -60,11 +77,57 @@ impl Default for WorldMapState {
 #[derive(Component)]
 pub struct Player;
 
+#[derive(Component, Debug, Clone, Copy)]
+pub struct Health {
+    pub current: f32,
+    pub max: f32,
+}
+
+impl Health {
+    pub fn full(max: f32) -> Self {
+        Self { current: max, max }
+    }
+
+    pub fn ratio(self) -> f32 {
+        if self.max <= 0.0 {
+            0.0
+        } else {
+            (self.current / self.max).clamp(0.0, 1.0)
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.current = self.max;
+    }
+
+    pub fn damage_fraction(&mut self, fraction: f32) {
+        self.current = (self.current - self.max * fraction).max(0.0);
+    }
+}
+
 #[derive(Component, Default)]
 struct Velocity(Vec3);
 
 #[derive(Component, Default)]
 struct DashCooldown(f32);
+
+#[derive(Component, Default)]
+struct FireCooldown(f32);
+
+#[derive(Component, Default)]
+pub struct ContactCooldown(pub f32);
+
+#[derive(Component)]
+pub struct Projectile {
+    pub radius: f32,
+    pub damage_fraction: f32,
+}
+
+#[derive(Component)]
+struct ProjectileVelocity(Vec3);
+
+#[derive(Component)]
+struct ProjectileLifetime(f32);
 
 #[derive(Component)]
 struct ArcadeBackground;
@@ -144,8 +207,11 @@ impl StarRandom {
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
         Player,
+        Health::full(PLAYER_MAX_HEALTH),
         Velocity::default(),
         DashCooldown::default(),
+        FireCooldown::default(),
+        ContactCooldown::default(),
         SpriteBundle {
             texture: asset_server.load(PLAYER_SPRITE),
             sprite: Sprite {
@@ -176,11 +242,50 @@ fn refresh_arcade_background(
     }
 }
 
+fn reset_combat_state(
+    mut commands: Commands,
+    state: Res<UiGameState>,
+    mut player_query: Query<
+        (
+            &mut Health,
+            &mut Velocity,
+            &mut DashCooldown,
+            &mut FireCooldown,
+            &mut ContactCooldown,
+        ),
+        With<Player>,
+    >,
+    projectiles: Query<Entity, With<Projectile>>,
+) {
+    if !state.is_changed() || (state.selected_mode == GameMode::Arcade && state.is_running) {
+        return;
+    }
+
+    if let Ok((mut health, mut velocity, mut dash_cooldown, mut fire_cooldown, mut contact)) =
+        player_query.get_single_mut()
+    {
+        health.reset();
+        velocity.0 = Vec3::ZERO;
+        dash_cooldown.0 = 0.0;
+        fire_cooldown.0 = 0.0;
+        contact.0 = 0.0;
+    }
+
+    for entity in &projectiles {
+        commands.entity(entity).despawn_recursive();
+    }
+}
+
 fn move_player(
     keyboard_input: Res<ButtonInput<KeyCode>>,
     time: Res<Time>,
+    state: Res<UiGameState>,
     mut player_query: Query<(&mut Transform, &mut Velocity, &mut DashCooldown), With<Player>>,
 ) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
     let Ok((mut transform, mut velocity, mut dash_cooldown)) = player_query.get_single_mut() else {
         return;
     };
@@ -201,6 +306,93 @@ fn move_player(
 
     transform.translation += velocity.0 * delta_seconds;
     clamp_player_to_map(&mut transform, &mut velocity);
+}
+
+fn tick_contact_cooldown(time: Res<Time>, mut players: Query<&mut ContactCooldown, With<Player>>) {
+    let delta_seconds = time.delta_seconds();
+
+    for mut cooldown in &mut players {
+        cooldown.0 = (cooldown.0 - delta_seconds).max(0.0);
+    }
+}
+
+fn fire_player_projectiles(
+    mut commands: Commands,
+    mouse_buttons: Res<ButtonInput<MouseButton>>,
+    time: Res<Time>,
+    state: Res<UiGameState>,
+    mut players: Query<(&Transform, &mut FireCooldown), With<Player>>,
+) {
+    let Ok((player_transform, mut fire_cooldown)) = players.get_single_mut() else {
+        return;
+    };
+
+    fire_cooldown.0 = (fire_cooldown.0 - time.delta_seconds()).max(0.0);
+
+    if state.selected_mode != GameMode::Arcade
+        || !state.is_running
+        || !mouse_buttons.pressed(MouseButton::Left)
+        || fire_cooldown.0 > 0.0
+    {
+        return;
+    }
+
+    let forward = player_transform.rotation * Vec3::Y;
+    let spawn_position = player_transform.translation + forward * PROJECTILE_SPAWN_OFFSET;
+    let projectile_rotation = player_transform.rotation;
+
+    commands.spawn((
+        Projectile {
+            radius: PROJECTILE_RADIUS,
+            damage_fraction: PROJECTILE_DAMAGE_FRACTION,
+        },
+        ProjectileVelocity(forward * PROJECTILE_SPEED),
+        ProjectileLifetime(PROJECTILE_LIFETIME_SECONDS),
+        SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgba(0.98, 0.96, 0.58, 0.98),
+                custom_size: Some(PROJECTILE_SIZE),
+                ..default()
+            },
+            transform: Transform::from_translation(Vec3::new(
+                spawn_position.x,
+                spawn_position.y,
+                PROJECTILE_Z,
+            ))
+            .with_rotation(projectile_rotation),
+            ..default()
+        },
+    ));
+
+    fire_cooldown.0 = PROJECTILE_FIRE_INTERVAL_SECONDS;
+}
+
+fn move_projectiles(
+    time: Res<Time>,
+    state: Res<UiGameState>,
+    mut projectiles: Query<(&mut Transform, &ProjectileVelocity, &mut ProjectileLifetime)>,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    let delta_seconds = time.delta_seconds();
+
+    for (mut transform, velocity, mut lifetime) in &mut projectiles {
+        transform.translation += velocity.0 * delta_seconds;
+        lifetime.0 -= delta_seconds;
+    }
+}
+
+fn cleanup_projectiles(
+    mut commands: Commands,
+    projectiles: Query<(Entity, &Transform, &ProjectileLifetime), With<Projectile>>,
+) {
+    for (entity, transform, lifetime) in &projectiles {
+        if lifetime.0 <= 0.0 || transform.translation.truncate().length() > MAP_RADIUS + 360.0 {
+            commands.entity(entity).despawn_recursive();
+        }
+    }
 }
 
 fn tick_dash_cooldown(dash_cooldown: &mut DashCooldown, delta_seconds: f32) {
@@ -348,13 +540,18 @@ fn follow_player_camera(
     }
 }
 
-fn draw_map_border(
-    state: Res<UiGameState>,
-    mut gizmos: Gizmos,
-) {
+fn draw_map_border(state: Res<UiGameState>, mut gizmos: Gizmos) {
     if state.selected_mode != GameMode::Arcade {
         return;
     }
 
     gizmos.circle_2d(Vec2::ZERO, MAP_RADIUS, MAP_BORDER_COLOR);
+}
+
+pub fn player_contact_damage_fraction() -> f32 {
+    PLAYER_CONTACT_DAMAGE_FRACTION
+}
+
+pub fn player_contact_invulnerability_seconds() -> f32 {
+    PLAYER_CONTACT_INVULNERABILITY_SECONDS
 }

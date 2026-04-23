@@ -3,7 +3,7 @@
 use bevy::diagnostic::{DiagnosticsStore, FrameTimeDiagnosticsPlugin};
 use bevy::prelude::*;
 
-use crate::game::{Player, WorldMapState, MAP_RADIUS};
+use crate::game::{Health, Player, WorldMapState, MAP_RADIUS};
 
 const TOP_BAR_HEIGHT: f32 = 126.0;
 const TOP_BAR_WIDTH: f32 = 456.0;
@@ -12,6 +12,10 @@ const FPS_PANEL_MARGIN: f32 = 12.0;
 const MINIMAP_MARGIN: f32 = 12.0;
 const MINIMAP_SIZE: f32 = 168.0;
 const MINIMAP_MARKER_SIZE: f32 = 10.0;
+const PLAYER_HEALTH_PANEL_MARGIN: f32 = 16.0;
+const PLAYER_HEALTH_PANEL_WIDTH: f32 = 240.0;
+const PLAYER_HEALTH_BAR_WIDTH: f32 = 208.0;
+const PLAYER_HEALTH_BAR_HEIGHT: f32 = 16.0;
 const BAR_BACKGROUND: Color = Color::srgba(0.02, 0.035, 0.07, 0.94);
 const PANEL_BACKGROUND: Color = Color::srgba(0.05, 0.075, 0.13, 0.96);
 const MINIMAP_BACKGROUND: Color = Color::srgba(0.04, 0.055, 0.1, 0.9);
@@ -40,7 +44,15 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<UiGameState>()
-            .add_systems(Startup, (spawn_top_bar, spawn_fps_counter, spawn_minimap))
+            .add_systems(
+                Startup,
+                (
+                    spawn_top_bar,
+                    spawn_fps_counter,
+                    spawn_minimap,
+                    spawn_player_health_panel,
+                ),
+            )
             .add_systems(
                 Update,
                 (
@@ -49,6 +61,7 @@ impl Plugin for UiPlugin {
                     refresh_ui_buttons,
                     refresh_fps_counter,
                     refresh_minimap,
+                    refresh_player_health_panel,
                 ),
             );
     }
@@ -73,7 +86,6 @@ impl Default for UiGameState {
 pub enum GameMode {
     Arcade,
     SideScrolling,
-    IdleOverlay,
 }
 
 impl GameMode {
@@ -81,7 +93,6 @@ impl GameMode {
         match self {
             Self::Arcade => "2D Arcade",
             Self::SideScrolling => "2D Side-Scrolling",
-            Self::IdleOverlay => "Idle Overlay",
         }
     }
 }
@@ -108,6 +119,15 @@ struct MinimapRoot;
 
 #[derive(Component)]
 struct MinimapMarker;
+
+#[derive(Component)]
+struct PlayerHealthRoot;
+
+#[derive(Component)]
+struct PlayerHealthFill;
+
+#[derive(Component)]
+struct PlayerHealthLabel;
 
 fn spawn_top_bar(mut commands: Commands) {
     commands
@@ -227,6 +247,82 @@ fn spawn_minimap(mut commands: Commands) {
         });
 }
 
+fn spawn_player_health_panel(mut commands: Commands) {
+    commands
+        .spawn((
+            NodeBundle {
+                style: Style {
+                    position_type: PositionType::Absolute,
+                    left: Val::Px(PLAYER_HEALTH_PANEL_MARGIN),
+                    bottom: Val::Px(PLAYER_HEALTH_PANEL_MARGIN),
+                    width: Val::Px(PLAYER_HEALTH_PANEL_WIDTH),
+                    padding: UiRect::all(Val::Px(12.0)),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: Val::Px(8.0),
+                    border: UiRect::all(Val::Px(1.0)),
+                    ..default()
+                },
+                background_color: PANEL_BACKGROUND.into(),
+                border_color: Color::srgba(0.28, 0.38, 0.52, 0.75).into(),
+                border_radius: BorderRadius::all(Val::Px(16.0)),
+                z_index: ZIndex::Global(11),
+                ..default()
+            },
+            PlayerHealthRoot,
+        ))
+        .with_children(|panel| {
+            panel.spawn(TextBundle::from_section(
+                "PLAYER",
+                TextStyle {
+                    font_size: 12.0,
+                    color: TEXT_MUTED,
+                    ..default()
+                },
+            ));
+
+            panel.spawn((
+                TextBundle::from_section(
+                    "HP 100 / 100",
+                    TextStyle {
+                        font_size: 15.0,
+                        color: TEXT_PRIMARY,
+                        ..default()
+                    },
+                ),
+                PlayerHealthLabel,
+            ));
+
+            panel
+                .spawn(NodeBundle {
+                    style: Style {
+                        width: Val::Px(PLAYER_HEALTH_BAR_WIDTH),
+                        height: Val::Px(PLAYER_HEALTH_BAR_HEIGHT),
+                        border: UiRect::all(Val::Px(1.0)),
+                        ..default()
+                    },
+                    background_color: Color::srgba(0.04, 0.06, 0.1, 0.94).into(),
+                    border_color: Color::srgba(0.2, 0.32, 0.44, 0.82).into(),
+                    border_radius: BorderRadius::all(Val::Px(999.0)),
+                    ..default()
+                })
+                .with_children(|bar| {
+                    bar.spawn((
+                        NodeBundle {
+                            style: Style {
+                                width: Val::Px(PLAYER_HEALTH_BAR_WIDTH),
+                                height: Val::Percent(100.0),
+                                ..default()
+                            },
+                            background_color: Color::srgba(0.24, 0.94, 0.54, 0.96).into(),
+                            border_radius: BorderRadius::all(Val::Px(999.0)),
+                            ..default()
+                        },
+                        PlayerHealthFill,
+                    ));
+                });
+        });
+}
+
 fn spawn_header_row(parent: &mut ChildBuilder) {
     parent
         .spawn(NodeBundle {
@@ -292,7 +388,7 @@ fn spawn_brand_panel(parent: &mut ChildBuilder) {
                 },
             ));
             panel.spawn(TextBundle::from_section(
-                "overlay control",
+                "game control",
                 TextStyle {
                     font_size: 8.0,
                     color: TEXT_MUTED,
@@ -362,11 +458,7 @@ fn spawn_mode_panel(parent: &mut ChildBuilder) {
                     ..default()
                 })
                 .with_children(|buttons| {
-                    for mode in [
-                        GameMode::Arcade,
-                        GameMode::SideScrolling,
-                        GameMode::IdleOverlay,
-                    ] {
+                    for mode in [GameMode::Arcade, GameMode::SideScrolling] {
                         spawn_button(
                             buttons,
                             mode.label(),
@@ -590,6 +682,41 @@ fn refresh_minimap(
     for mut style in &mut marker_styles {
         style.left = Val::Px(minimap_position.x - MINIMAP_MARKER_SIZE / 2.0);
         style.top = Val::Px(minimap_position.y - MINIMAP_MARKER_SIZE / 2.0);
+    }
+}
+
+fn refresh_player_health_panel(
+    state: Res<UiGameState>,
+    player_query: Query<&Health, With<Player>>,
+    mut roots: Query<&mut Visibility, With<PlayerHealthRoot>>,
+    mut labels: Query<&mut Text, With<PlayerHealthLabel>>,
+    mut fills: Query<&mut Style, With<PlayerHealthFill>>,
+) {
+    let visibility = if state.selected_mode == GameMode::Arcade {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+
+    for mut root_visibility in &mut roots {
+        *root_visibility = visibility;
+    }
+
+    if state.selected_mode != GameMode::Arcade {
+        return;
+    }
+
+    let Ok(health) = player_query.get_single() else {
+        return;
+    };
+
+    for mut text in &mut labels {
+        text.sections[0].value = format!("HP {:.0} / {:.0}", health.current, health.max);
+    }
+
+    let width = PLAYER_HEALTH_BAR_WIDTH * health.ratio();
+    for mut style in &mut fills {
+        style.width = Val::Px(width);
     }
 }
 
