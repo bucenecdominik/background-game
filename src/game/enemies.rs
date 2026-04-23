@@ -1,7 +1,6 @@
 //! Enemy system with the first real Drone Swarm enemy.
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
 
 use super::Player;
 use crate::ui::{GameMode, UiGameState};
@@ -18,7 +17,8 @@ const DRONE_SWARM_COHESION_WEIGHT: f32 = 0.22;
 const DRONE_SWARM_ALIGNMENT_WEIGHT: f32 = 0.32;
 const DRONE_SWARM_SEPARATION_WEIGHT: f32 = 2.8;
 const DRONE_SWARM_SEEK_WEIGHT: f32 = 0.72;
-const DRONE_SWARM_SPAWN_MARGIN: f32 = 170.0;
+const DRONE_SWARM_SPAWN_DISTANCE_MIN: f32 = 820.0;
+const DRONE_SWARM_SPAWN_DISTANCE_MAX: f32 = 1220.0;
 const DRONE_SWARM_MEMBER_SPACING: f32 = 92.0;
 const DRONE_SWARM_ROTATING_SPIN_SPEED: f32 = -3.6;
 const DRONE_SWARM_HARD_SEPARATION_DISTANCE: f32 = 48.0;
@@ -287,7 +287,6 @@ pub struct EnemySpec {
 fn spawn_drone_swarm_wave(
     mut commands: Commands,
     state: Res<UiGameState>,
-    primary_window: Query<&Window, With<PrimaryWindow>>,
     player_query: Query<&Transform, With<Player>>,
     assets: Res<DroneSwarmAssets>,
     mut wave_state: ResMut<EnemyWaveState>,
@@ -297,9 +296,6 @@ fn spawn_drone_swarm_wave(
         return;
     }
 
-    let Ok(window) = primary_window.get_single() else {
-        return;
-    };
     let Ok(player_transform) = player_query.get_single() else {
         return;
     };
@@ -308,9 +304,9 @@ fn spawn_drone_swarm_wave(
     let wave_id = wave_state.next_wave_id;
     wave_state.next_wave_id += 1;
 
-    let spawn_center =
-        random_spawn_center(&mut random, window, player_transform.translation.truncate());
-    let tangent = tangent_for_spawn(spawn_center).normalize_or_zero();
+    let player_position = player_transform.translation.truncate();
+    let spawn_center = random_spawn_center(&mut random, player_position);
+    let tangent = tangent_for_spawn(spawn_center - player_position).normalize_or_zero();
     let spec = EnemyKind::DroneSwarm.spec();
 
     for index in 0..count {
@@ -320,7 +316,7 @@ fn spawn_drone_swarm_wave(
         let lateral_jitter = tangent * random.range_f32(-18.0, 18.0);
         let position = spawn_center + along_line + inward_jitter + lateral_jitter;
         let variant = DroneSwarmVariant::random(&mut random);
-        let facing = (player_transform.translation.truncate() - position).normalize_or_zero();
+        let facing = (player_position - position).normalize_or_zero();
         let base_rotation = velocity_to_angle(facing);
 
         commands.spawn((
@@ -523,32 +519,15 @@ fn refresh_enemy_visibility(
     }
 }
 
-fn random_spawn_center(random: &mut EnemyRandom, window: &Window, player_position: Vec2) -> Vec2 {
-    let half_width = window.resolution.width() / 2.0;
-    let half_height = window.resolution.height() / 2.0;
-    let side = random.range_usize(0, 3);
+fn random_spawn_center(random: &mut EnemyRandom, player_position: Vec2) -> Vec2 {
+    let angle = random.range_f32(0.0, std::f32::consts::TAU);
+    let direction = Vec2::new(angle.cos(), angle.sin());
+    let distance = random.range_f32(
+        DRONE_SWARM_SPAWN_DISTANCE_MIN,
+        DRONE_SWARM_SPAWN_DISTANCE_MAX,
+    );
 
-    let base = match side {
-        0 => Vec2::new(
-            -half_width - DRONE_SWARM_SPAWN_MARGIN,
-            random.range_f32(-half_height * 0.8, half_height * 0.8),
-        ),
-        1 => Vec2::new(
-            half_width + DRONE_SWARM_SPAWN_MARGIN,
-            random.range_f32(-half_height * 0.8, half_height * 0.8),
-        ),
-        2 => Vec2::new(
-            random.range_f32(-half_width * 0.8, half_width * 0.8),
-            half_height + DRONE_SWARM_SPAWN_MARGIN,
-        ),
-        _ => Vec2::new(
-            random.range_f32(-half_width * 0.8, half_width * 0.8),
-            -half_height - DRONE_SWARM_SPAWN_MARGIN,
-        ),
-    };
-
-    let avoidance = (base - player_position).normalize_or_zero() * 48.0;
-    base + avoidance
+    player_position + direction * distance
 }
 
 fn tangent_for_spawn(spawn_center: Vec2) -> Vec2 {
