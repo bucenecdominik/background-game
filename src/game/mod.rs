@@ -3,6 +3,13 @@
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
+use crate::ui::{GameMode, UiGameState};
+
+const BACKGROUND_SIZE: Vec2 = Vec2::new(4096.0, 4096.0);
+const BACKGROUND_Z: f32 = -20.0;
+const STAR_Z: f32 = -19.0;
+const STAR_COUNT: usize = 260;
+const ARCADE_BACKGROUND_COLOR: Color = Color::BLACK;
 const PLAYER_SIZE: f32 = 110.0;
 const PLAYER_HALF_SIZE: f32 = PLAYER_SIZE / 2.0;
 const PLAYER_ACCELERATION: f32 = 560.0;
@@ -19,8 +26,8 @@ pub struct GamePlugin;
 
 impl Plugin for GamePlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Startup, spawn_player)
-            .add_systems(Update, move_player);
+        app.add_systems(Startup, (spawn_arcade_background, spawn_player))
+            .add_systems(Update, (move_player, refresh_arcade_background));
     }
 }
 
@@ -32,6 +39,74 @@ struct Velocity(Vec3);
 
 #[derive(Component, Default)]
 struct DashCooldown(f32);
+
+#[derive(Component)]
+struct ArcadeBackground;
+
+fn spawn_arcade_background(mut commands: Commands) {
+    commands
+        .spawn((
+            ArcadeBackground,
+            SpatialBundle {
+                visibility: Visibility::Visible,
+                ..default()
+            },
+        ))
+        .with_children(|background| {
+            background.spawn(SpriteBundle {
+                sprite: Sprite {
+                    color: ARCADE_BACKGROUND_COLOR,
+                    custom_size: Some(BACKGROUND_SIZE),
+                    ..default()
+                },
+                transform: Transform::from_xyz(0.0, 0.0, BACKGROUND_Z),
+                ..default()
+            });
+
+            spawn_starfield(background);
+        });
+}
+
+fn spawn_starfield(parent: &mut ChildBuilder) {
+    let mut random = StarRandom::new(0x5EED_5ACE);
+
+    for _ in 0..STAR_COUNT {
+        let position = Vec3::new(
+            random.range(-BACKGROUND_SIZE.x / 2.0, BACKGROUND_SIZE.x / 2.0),
+            random.range(-BACKGROUND_SIZE.y / 2.0, BACKGROUND_SIZE.y / 2.0),
+            STAR_Z + random.range(0.0, 0.6),
+        );
+        let size = random.range(1.0, 3.2);
+        let brightness = random.range(0.45, 0.95);
+
+        parent.spawn(SpriteBundle {
+            sprite: Sprite {
+                color: Color::srgba(0.82, 0.92, 1.0, brightness),
+                custom_size: Some(Vec2::splat(size)),
+                ..default()
+            },
+            transform: Transform::from_translation(position),
+            ..default()
+        });
+    }
+}
+
+struct StarRandom(u32);
+
+impl StarRandom {
+    fn new(seed: u32) -> Self {
+        Self(seed)
+    }
+
+    fn range(&mut self, min: f32, max: f32) -> f32 {
+        min + (max - min) * self.next_unit()
+    }
+
+    fn next_unit(&mut self) -> f32 {
+        self.0 = self.0.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        self.0 as f32 / u32::MAX as f32
+    }
+}
 
 fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
     commands.spawn((
@@ -47,6 +122,25 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
             ..default()
         },
     ));
+}
+
+fn refresh_arcade_background(
+    state: Res<UiGameState>,
+    mut backgrounds: Query<&mut Visibility, With<ArcadeBackground>>,
+) {
+    if !state.is_changed() {
+        return;
+    }
+
+    let visibility = if state.selected_mode == GameMode::Arcade {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+
+    for mut background_visibility in &mut backgrounds {
+        *background_visibility = visibility;
+    }
 }
 
 fn move_player(
