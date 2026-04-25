@@ -1262,9 +1262,30 @@ fn tangent_for_spawn(spawn_center: Vec2) -> Vec2 {
 }
 
 fn velocity_to_angle(direction: Vec2) -> f32 {
-    direction.x.atan2(direction.y)
+    (-direction.x).atan2(direction.y)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f32 = 0.0001;
+
+    fn assert_angle_near(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() <= EPSILON,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    #[test]
+    fn velocity_to_angle_keeps_sprite_tip_aligned_with_velocity() {
+        assert_angle_near(velocity_to_angle(Vec2::Y), 0.0);
+        assert_angle_near(velocity_to_angle(Vec2::X), -std::f32::consts::FRAC_PI_2);
+        assert_angle_near(velocity_to_angle(Vec2::NEG_X), std::f32::consts::FRAC_PI_2);
+        assert_angle_near(velocity_to_angle(Vec2::NEG_Y), -std::f32::consts::PI);
+    }
+}
 
 fn clamp_vec2_length(vector: Vec2, max_length: f32) -> Vec2 {
     let length = vector.length();
