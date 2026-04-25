@@ -778,8 +778,11 @@ fn refresh_minimap(
     };
 
     let map_radius = map_state.radius.max(MAP_RADIUS);
-    let minimap_position =
-        world_to_minimap(player_transform.translation.truncate(), map_radius, MINIMAP_SIZE);
+    let minimap_position = world_to_minimap(
+        player_transform.translation.truncate(),
+        map_radius,
+        MINIMAP_SIZE,
+    );
 
     for mut style in &mut marker_styles {
         style.left = Val::Px(minimap_position.x - MINIMAP_MARKER_SIZE / 2.0);
@@ -914,5 +917,111 @@ fn border_color(action: UiButtonAction, interaction: Interaction, state: &UiGame
             Color::srgba(0.75, 0.92, 1.0, 1.0)
         }
         _ => Color::srgba(0.24, 0.33, 0.45, 0.65),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f32 = 0.0001;
+
+    fn assert_vec2_near(actual: Vec2, expected: Vec2) {
+        assert!(
+            actual.distance(expected) <= EPSILON,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn default_ui_state_starts_in_paused_arcade_mode() {
+        let state = UiGameState::default();
+
+        assert_eq!(state.selected_mode, GameMode::Arcade);
+        assert!(!state.is_running);
+        assert!(!state.is_defeated);
+    }
+
+    #[test]
+    fn game_mode_labels_match_button_text() {
+        assert_eq!(GameMode::Arcade.label(), "2D Arcade");
+        assert_eq!(GameMode::SideScrolling.label(), "2D Side-Scrolling");
+    }
+
+    #[test]
+    fn world_to_minimap_maps_world_center_and_edges() {
+        assert_vec2_near(
+            world_to_minimap(Vec2::ZERO, 100.0, 200.0),
+            Vec2::new(100.0, 100.0),
+        );
+        assert_vec2_near(
+            world_to_minimap(Vec2::new(100.0, 0.0), 100.0, 200.0),
+            Vec2::new(200.0, 100.0),
+        );
+        assert_vec2_near(
+            world_to_minimap(Vec2::new(0.0, 100.0), 100.0, 200.0),
+            Vec2::new(100.0, 0.0),
+        );
+    }
+
+    #[test]
+    fn world_to_minimap_clamps_positions_outside_map_radius() {
+        assert_vec2_near(
+            world_to_minimap(Vec2::new(300.0, 0.0), 100.0, 200.0),
+            Vec2::new(200.0, 100.0),
+        );
+    }
+
+    #[test]
+    fn button_color_reflects_state_interaction_and_action() {
+        let running = UiGameState {
+            selected_mode: GameMode::Arcade,
+            is_running: true,
+            is_defeated: false,
+        };
+        let defeated = UiGameState {
+            selected_mode: GameMode::Arcade,
+            is_running: false,
+            is_defeated: true,
+        };
+
+        assert_eq!(
+            button_color(
+                UiButtonAction::SelectMode(GameMode::Arcade),
+                Interaction::None,
+                &running
+            ),
+            BUTTON_ACTIVE_BACKGROUND
+        );
+        assert_eq!(
+            button_color(UiButtonAction::ToggleRunning, Interaction::None, &running),
+            PAUSE_BACKGROUND
+        );
+        assert_eq!(
+            button_color(
+                UiButtonAction::ToggleRunning,
+                Interaction::Hovered,
+                &defeated
+            ),
+            Color::srgba(0.2, 0.23, 0.28, 0.92)
+        );
+    }
+
+    #[test]
+    fn border_color_highlights_hovered_and_selected_buttons() {
+        let state = UiGameState::default();
+
+        assert_eq!(
+            border_color(UiButtonAction::NewGame, Interaction::Hovered, &state),
+            Color::srgba(0.75, 0.92, 1.0, 0.92)
+        );
+        assert_eq!(
+            border_color(
+                UiButtonAction::SelectMode(GameMode::Arcade),
+                Interaction::None,
+                &state
+            ),
+            Color::srgba(0.75, 0.92, 1.0, 1.0)
+        );
     }
 }

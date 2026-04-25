@@ -559,3 +559,118 @@ pub fn player_contact_damage_fraction() -> f32 {
 pub fn player_contact_invulnerability_seconds() -> f32 {
     PLAYER_CONTACT_INVULNERABILITY_SECONDS
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPSILON: f32 = 0.0001;
+
+    fn assert_vec3_near(actual: Vec3, expected: Vec3) {
+        assert!(
+            actual.distance(expected) <= EPSILON,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn health_tracks_ratio_damage_and_reset() {
+        let mut health = Health::full(120.0);
+
+        assert_eq!(health.current, 120.0);
+        assert_eq!(health.max, 120.0);
+        assert_eq!(health.ratio(), 1.0);
+
+        health.damage_fraction(0.25);
+        assert_eq!(health.current, 90.0);
+        assert_eq!(health.ratio(), 0.75);
+
+        health.damage_fraction(2.0);
+        assert_eq!(health.current, 0.0);
+        assert_eq!(health.ratio(), 0.0);
+
+        health.reset();
+        assert_eq!(health.current, 120.0);
+    }
+
+    #[test]
+    fn health_ratio_handles_invalid_and_overfilled_values() {
+        assert_eq!(
+            Health {
+                current: 10.0,
+                max: 0.0
+            }
+            .ratio(),
+            0.0
+        );
+        assert_eq!(
+            Health {
+                current: 150.0,
+                max: 100.0
+            }
+            .ratio(),
+            1.0
+        );
+        assert_eq!(
+            Health {
+                current: -20.0,
+                max: 100.0
+            }
+            .ratio(),
+            0.0
+        );
+    }
+
+    #[test]
+    fn dash_player_sets_velocity_and_cooldown() {
+        let mut velocity = Velocity::default();
+        let mut cooldown = DashCooldown::default();
+
+        dash_player(&mut velocity, Vec3::Y, &mut cooldown);
+
+        assert_vec3_near(velocity.0, Vec3::Y * PLAYER_DASH_SPEED);
+        assert_eq!(cooldown.0, PLAYER_DASH_COOLDOWN_SECONDS);
+    }
+
+    #[test]
+    fn cooldowns_never_tick_below_zero() {
+        let mut cooldown = DashCooldown(0.1);
+
+        tick_dash_cooldown(&mut cooldown, 0.25);
+
+        assert_eq!(cooldown.0, 0.0);
+    }
+
+    #[test]
+    fn move_toward_zero_reduces_vectors_without_overshooting() {
+        assert_vec3_near(
+            move_toward_zero(Vec3::new(10.0, 0.0, 0.0), 3.0),
+            Vec3::new(7.0, 0.0, 0.0),
+        );
+        assert_vec3_near(move_toward_zero(Vec3::new(2.0, 0.0, 0.0), 3.0), Vec3::ZERO);
+    }
+
+    #[test]
+    fn clamp_player_to_map_limits_position_and_removes_outward_velocity() {
+        let allowed_radius = MAP_RADIUS - PLAYER_COLLISION_RADIUS;
+        let mut transform = Transform::from_xyz(MAP_RADIUS + 100.0, 0.0, 7.0);
+        let mut velocity = Velocity(Vec3::new(50.0, 20.0, 3.0));
+
+        clamp_player_to_map(&mut transform, &mut velocity);
+
+        assert_vec3_near(transform.translation, Vec3::new(allowed_radius, 0.0, 7.0));
+        assert_vec3_near(velocity.0, Vec3::new(0.0, 20.0, 3.0));
+    }
+
+    #[test]
+    fn contact_damage_accessors_match_gameplay_constants() {
+        assert_eq!(
+            player_contact_damage_fraction(),
+            PLAYER_CONTACT_DAMAGE_FRACTION
+        );
+        assert_eq!(
+            player_contact_invulnerability_seconds(),
+            PLAYER_CONTACT_INVULNERABILITY_SECONDS
+        );
+    }
+}

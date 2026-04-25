@@ -596,9 +596,7 @@ fn spawn_kamikaze_wave(
                 },
                 KamikazeDroneAgent,
                 EnemyVelocity(facing * spec.speed),
-                KamikazeVisual {
-                    base_rotation,
-                },
+                KamikazeVisual { base_rotation },
                 Name::new(format!(
                     "{} {} - {}",
                     spec.display_name,
@@ -689,7 +687,11 @@ fn move_drone_swarm(
                 &EnemyStats,
                 &Health,
             ),
-            (With<DroneSwarmAgent>, Without<Player>, Without<PendingDetonation>),
+            (
+                With<DroneSwarmAgent>,
+                Without<Player>,
+                Without<PendingDetonation>,
+            ),
         >,
     )>,
 ) {
@@ -827,7 +829,11 @@ fn move_kamikaze_drones(
                 &EnemyStats,
                 &KamikazeDroneAgent,
             ),
-            (With<KamikazeDroneAgent>, Without<Player>, Without<PendingDetonation>),
+            (
+                With<KamikazeDroneAgent>,
+                Without<Player>,
+                Without<PendingDetonation>,
+            ),
         >,
     )>,
 ) {
@@ -873,7 +879,8 @@ fn move_kamikaze_drones(
         let desired_velocity = steering.normalize_or_zero()
             * (stats.speed + randomish_speed_offset(entity.index()) * 0.45);
         let velocity_delta = desired_velocity - velocity.0;
-        let clamped_delta = clamp_vec2_length(velocity_delta, KAMIKAZE_ACCELERATION * delta_seconds);
+        let clamped_delta =
+            clamp_vec2_length(velocity_delta, KAMIKAZE_ACCELERATION * delta_seconds);
         velocity.0 = clamp_vec2_length(velocity.0 + clamped_delta, KAMIKAZE_MAX_SPEED);
 
         transform.translation.x += velocity.0.x * delta_seconds;
@@ -885,7 +892,11 @@ fn sync_drone_swarm_visuals(
     state: Res<UiGameState>,
     enemy_visuals: Query<
         (&EnemyVelocity, &DroneSwarmAgent, &DroneSwarmVisual, &Health),
-        (With<DroneSwarmAgent>, Without<DroneSwarmSprite>, Without<PendingDetonation>),
+        (
+            With<DroneSwarmAgent>,
+            Without<DroneSwarmSprite>,
+            Without<PendingDetonation>,
+        ),
     >,
     mut sprite_transforms: Query<(&Parent, &mut Transform), With<DroneSwarmSprite>>,
 ) {
@@ -913,7 +924,11 @@ fn sync_kamikaze_visuals(
     state: Res<UiGameState>,
     enemy_visuals: Query<
         (&EnemyVelocity, &KamikazeVisual, &Health),
-        (With<KamikazeDroneAgent>, Without<KamikazeDroneSprite>, Without<PendingDetonation>),
+        (
+            With<KamikazeDroneAgent>,
+            Without<KamikazeDroneSprite>,
+            Without<PendingDetonation>,
+        ),
     >,
     mut sprite_transforms: Query<(&Parent, &mut Transform), With<KamikazeDroneSprite>>,
 ) {
@@ -940,7 +955,10 @@ fn sync_kamikaze_visuals(
 fn handle_projectile_enemy_collisions(
     mut commands: Commands,
     state: Res<UiGameState>,
-    mut enemies: Query<(Entity, &Transform, &EnemyStats, &mut Health), (With<Enemy>, Without<PendingDetonation>)>,
+    mut enemies: Query<
+        (Entity, &Transform, &EnemyStats, &mut Health),
+        (With<Enemy>, Without<PendingDetonation>),
+    >,
     projectiles: Query<(Entity, &Transform, &Projectile)>,
 ) {
     if state.selected_mode != GameMode::Arcade || !state.is_running {
@@ -971,10 +989,17 @@ fn handle_projectile_enemy_collisions(
 fn handle_kamikaze_enemy_collisions(
     mut commands: Commands,
     state: Res<UiGameState>,
-    kamikaze_query: Query<(Entity, &Transform, &EnemyStats), (With<KamikazeDroneAgent>, Without<PendingDetonation>)>,
+    kamikaze_query: Query<
+        (Entity, &Transform, &EnemyStats),
+        (With<KamikazeDroneAgent>, Without<PendingDetonation>),
+    >,
     other_enemy_query: Query<
         (Entity, &Transform, &EnemyStats),
-        (With<Enemy>, Without<KamikazeDroneAgent>, Without<PendingDetonation>),
+        (
+            With<Enemy>,
+            Without<KamikazeDroneAgent>,
+            Without<PendingDetonation>,
+        ),
     >,
 ) {
     if state.selected_mode != GameMode::Arcade || !state.is_running {
@@ -1052,7 +1077,10 @@ fn handle_enemy_player_collisions(
 fn resolve_pending_detonations(
     mut commands: Commands,
     state: Res<UiGameState>,
-    detonating_enemies: Query<(Entity, &Transform, &EnemyStats), (With<PendingDetonation>, With<Enemy>)>,
+    detonating_enemies: Query<
+        (Entity, &Transform, &EnemyStats),
+        (With<PendingDetonation>, With<Enemy>),
+    >,
     mut enemy_query: Query<
         (Entity, &Transform, &EnemyStats, &mut Health),
         (With<Enemy>, Without<Player>, Without<PendingDetonation>),
@@ -1143,7 +1171,10 @@ fn animate_explosion_effects(
     }
 }
 
-fn despawn_destroyed_enemies(mut commands: Commands, enemies: Query<(Entity, &Health), With<Enemy>>) {
+fn despawn_destroyed_enemies(
+    mut commands: Commands,
+    enemies: Query<(Entity, &Health), With<Enemy>>,
+) {
     for (entity, health) in &enemies {
         if health.current <= 0.0 {
             commands.entity(entity).despawn_recursive();
@@ -1154,7 +1185,9 @@ fn despawn_destroyed_enemies(mut commands: Commands, enemies: Query<(Entity, &He
 fn update_enemy_health_bars(
     state: Res<UiGameState>,
     enemy_health: Query<&Health, With<Enemy>>,
-    mut transforms: ParamSet<(Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>, )>,
+    mut transforms: ParamSet<(
+        Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
+    )>,
     root_parents: Query<&Parent, With<EnemyHealthBarRoot>>,
 ) {
     if state.selected_mode != GameMode::Arcade {
@@ -1278,12 +1311,88 @@ mod tests {
         );
     }
 
+    fn assert_vec2_near(actual: Vec2, expected: Vec2) {
+        assert!(
+            actual.distance(expected) <= EPSILON,
+            "expected {expected:?}, got {actual:?}"
+        );
+    }
+
+    #[test]
+    fn enemy_specs_capture_kamikaze_explosion_behavior() {
+        let drone_swarm = EnemyKind::DroneSwarm.spec();
+        let kamikaze = EnemyKind::KamikazeDrone.spec();
+
+        assert!(!drone_swarm.explodes_on_contact);
+        assert_eq!(drone_swarm.explosion_radius, 0.0);
+        assert!(kamikaze.explodes_on_contact);
+        assert!(kamikaze.explosion_radius > kamikaze.size.max_element());
+        assert!(kamikaze.explosion_damage_fraction > 0.0);
+    }
+
+    #[test]
+    fn enemy_random_generates_values_inside_requested_ranges() {
+        let mut random = EnemyRandom::default();
+
+        for _ in 0..100 {
+            let count = random.range_usize(KAMIKAZE_MIN_COUNT, KAMIKAZE_MAX_COUNT);
+            assert!((KAMIKAZE_MIN_COUNT..=KAMIKAZE_MAX_COUNT).contains(&count));
+
+            let value = random.range_f32(-8.0, 12.0);
+            assert!((-8.0..=12.0).contains(&value));
+        }
+    }
+
+    #[test]
+    fn random_spawn_center_uses_expected_distance_band_from_player() {
+        let mut random = EnemyRandom::default();
+        let player_position = Vec2::new(30.0, -45.0);
+
+        for _ in 0..32 {
+            let spawn_center = random_spawn_center(&mut random, player_position);
+            let distance = spawn_center.distance(player_position);
+
+            assert!(distance >= DRONE_SWARM_SPAWN_DISTANCE_MIN);
+            assert!(distance <= DRONE_SWARM_SPAWN_DISTANCE_MAX);
+        }
+    }
+
+    #[test]
+    fn tangent_for_spawn_is_perpendicular_to_spawn_vector() {
+        let spawn_center = Vec2::new(10.0, 25.0);
+        let tangent = tangent_for_spawn(spawn_center);
+
+        assert_angle_near(tangent.dot(spawn_center), 0.0);
+        assert_eq!(tangent.length(), spawn_center.length());
+    }
+
     #[test]
     fn velocity_to_angle_keeps_sprite_tip_aligned_with_velocity() {
         assert_angle_near(velocity_to_angle(Vec2::Y), 0.0);
         assert_angle_near(velocity_to_angle(Vec2::X), -std::f32::consts::FRAC_PI_2);
         assert_angle_near(velocity_to_angle(Vec2::NEG_X), std::f32::consts::FRAC_PI_2);
         assert_angle_near(velocity_to_angle(Vec2::NEG_Y), -std::f32::consts::PI);
+    }
+
+    #[test]
+    fn clamp_vec2_length_preserves_short_vectors_and_limits_long_ones() {
+        assert_vec2_near(
+            clamp_vec2_length(Vec2::new(3.0, 4.0), 6.0),
+            Vec2::new(3.0, 4.0),
+        );
+        assert_vec2_near(
+            clamp_vec2_length(Vec2::new(6.0, 8.0), 5.0),
+            Vec2::new(3.0, 4.0),
+        );
+        assert_vec2_near(clamp_vec2_length(Vec2::ZERO, 5.0), Vec2::ZERO);
+    }
+
+    #[test]
+    fn randomish_speed_offset_is_stable_and_centered() {
+        assert_eq!(randomish_speed_offset(0), -13.5);
+        assert_eq!(randomish_speed_offset(3), 0.0);
+        assert_eq!(randomish_speed_offset(6), 13.5);
+        assert_eq!(randomish_speed_offset(7), -13.5);
     }
 }
 
