@@ -1,5 +1,6 @@
 //! Game domain module.
 
+mod effects;
 mod enemies;
 
 use bevy::prelude::*;
@@ -36,6 +37,10 @@ const PROJECTILE_SPAWN_OFFSET: f32 = 74.0;
 const PROJECTILE_DAMAGE_FRACTION: f32 = 0.20;
 const PLAYER_CONTACT_DAMAGE_FRACTION: f32 = 0.10;
 const PROJECTILE_Z: f32 = 1.8;
+const PLAYER_TRAIL_Z: f32 = -0.15;
+const PLAYER_TRAIL_MIN_SPEED: f32 = 95.0;
+const PLAYER_TRAIL_INTERVAL_SECONDS: f32 = 0.032;
+const PLAYER_TRAIL_OFFSET: f32 = 46.0;
 const PLAYER_SPRITE: &str = "sprites/ally-jet.png";
 
 pub struct GamePlugin;
@@ -50,6 +55,7 @@ impl Plugin for GamePlugin {
                 (
                     reset_combat_state,
                     move_player,
+                    spawn_player_trail,
                     tick_contact_cooldown,
                     fire_player_projectiles,
                     move_projectiles,
@@ -57,6 +63,7 @@ impl Plugin for GamePlugin {
                     follow_player_camera,
                     refresh_arcade_background,
                     draw_map_border,
+                    effects::animate_visual_effects,
                 )
                     .chain(),
             );
@@ -136,29 +143,18 @@ fn spawn_arcade_background(mut commands: Commands) {
     let background_size = Vec2::splat((MAP_RADIUS + BACKGROUND_PADDING) * 2.0);
 
     commands
-        .spawn((
-            ArcadeBackground,
-            SpatialBundle {
-                visibility: Visibility::Visible,
-                ..default()
-            },
-        ))
+        .spawn((ArcadeBackground, Transform::default(), Visibility::Visible))
         .with_children(|background| {
-            background.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: ARCADE_BACKGROUND_COLOR,
-                    custom_size: Some(background_size),
-                    ..default()
-                },
-                transform: Transform::from_xyz(0.0, 0.0, BACKGROUND_Z),
-                ..default()
-            });
+            background.spawn((
+                Sprite::from_color(ARCADE_BACKGROUND_COLOR, background_size),
+                Transform::from_xyz(0.0, 0.0, BACKGROUND_Z),
+            ));
 
             spawn_starfield(background);
         });
 }
 
-fn spawn_starfield(parent: &mut ChildBuilder) {
+fn spawn_starfield(parent: &mut ChildSpawnerCommands) {
     let mut random = StarRandom::new(0x5EED_5ACE);
 
     for _ in 0..STAR_COUNT {
@@ -175,15 +171,10 @@ fn spawn_starfield(parent: &mut ChildBuilder) {
         let size = random.range(1.0, 3.2);
         let brightness = random.range(0.45, 0.95);
 
-        parent.spawn(SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgba(0.82, 0.92, 1.0, brightness),
-                custom_size: Some(Vec2::splat(size)),
-                ..default()
-            },
-            transform: Transform::from_translation(position),
-            ..default()
-        });
+        parent.spawn((
+            Sprite::from_color(Color::srgba(0.82, 0.92, 1.0, brightness), Vec2::splat(size)),
+            Transform::from_translation(position),
+        ));
     }
 }
 
@@ -209,15 +200,13 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>) {
         Player,
         Health::full(PLAYER_MAX_HEALTH),
         Velocity::default(),
+        effects::TrailEmitter::new(PLAYER_TRAIL_INTERVAL_SECONDS),
         DashCooldown::default(),
         FireCooldown::default(),
         ContactCooldown::default(),
-        SpriteBundle {
-            texture: asset_server.load(PLAYER_SPRITE),
-            sprite: Sprite {
-                custom_size: Some(Vec2::new(PLAYER_SIZE * PLAYER_ASPECT_RATIO, PLAYER_SIZE)),
-                ..default()
-            },
+        Sprite {
+            image: asset_server.load(PLAYER_SPRITE),
+            custom_size: Some(Vec2::new(PLAYER_SIZE * PLAYER_ASPECT_RATIO, PLAYER_SIZE)),
             ..default()
         },
     ));
@@ -266,7 +255,7 @@ fn reset_combat_state(
     }
 
     if let Ok((mut health, mut velocity, mut dash_cooldown, mut fire_cooldown, mut contact)) =
-        player_query.get_single_mut()
+        player_query.single_mut()
     {
         health.reset();
         velocity.0 = Vec3::ZERO;
@@ -276,7 +265,7 @@ fn reset_combat_state(
     }
 
     for entity in &projectiles {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -290,11 +279,11 @@ fn move_player(
         return;
     }
 
-    let Ok((mut transform, mut velocity, mut dash_cooldown)) = player_query.get_single_mut() else {
+    let Ok((mut transform, mut velocity, mut dash_cooldown)) = player_query.single_mut() else {
         return;
     };
 
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
     let rotation_direction = rotation_direction(&keyboard_input);
     let movement_direction = movement_direction(&keyboard_input);
 
@@ -312,8 +301,65 @@ fn move_player(
     clamp_player_to_map(&mut transform, &mut velocity);
 }
 
+fn spawn_player_trail(
+    mut commands: Commands,
+    time: Res<Time>,
+    state: Res<UiGameState>,
+    mut player_query: Query<
+        (
+            &Transform,
+            &Velocity,
+            &DashCooldown,
+            &mut effects::TrailEmitter,
+        ),
+        With<Player>,
+    >,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    let Ok((transform, velocity, dash_cooldown, mut emitter)) = player_query.single_mut() else {
+        return;
+    };
+
+    let velocity = velocity.0.truncate();
+    let speed = velocity.length();
+    if speed < PLAYER_TRAIL_MIN_SPEED || !emitter.tick(time.delta_secs()) {
+        return;
+    }
+
+    let direction = -velocity.normalize_or_zero();
+    let speed_ratio = ((speed - PLAYER_TRAIL_MIN_SPEED)
+        / (PLAYER_DASH_SPEED - PLAYER_TRAIL_MIN_SPEED))
+        .clamp(0.0, 1.0);
+    let dash_ratio = (dash_cooldown.0 / PLAYER_DASH_COOLDOWN_SECONDS).clamp(0.0, 1.0);
+    let intensity = (speed_ratio + dash_ratio * 0.55).clamp(0.0, 1.0);
+    let position = transform.translation.truncate()
+        + direction * (PLAYER_TRAIL_OFFSET + speed_ratio * 20.0 + dash_ratio * 16.0);
+
+    effects::spawn_trail_segment(
+        &mut commands,
+        effects::TrailSegmentSpec {
+            position,
+            direction,
+            z: PLAYER_TRAIL_Z,
+            length: 42.0 + speed_ratio * 82.0 + dash_ratio * 44.0,
+            width: 12.0 + intensity * 20.0,
+            lifetime: 0.16 + speed_ratio * 0.14 + dash_ratio * 0.08,
+            color: if dash_ratio > 0.12 {
+                Color::srgba(0.5, 0.95, 1.0, 1.0)
+            } else {
+                Color::srgba(0.3, 0.72, 1.0, 1.0)
+            },
+            alpha: 0.26 + intensity * 0.48,
+            drift_speed: 38.0 + speed_ratio * 92.0,
+        },
+    );
+}
+
 fn tick_contact_cooldown(time: Res<Time>, mut players: Query<&mut ContactCooldown, With<Player>>) {
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
 
     for mut cooldown in &mut players {
         cooldown.0 = (cooldown.0 - delta_seconds).max(0.0);
@@ -327,11 +373,11 @@ fn fire_player_projectiles(
     state: Res<UiGameState>,
     mut players: Query<(&Transform, &mut FireCooldown), With<Player>>,
 ) {
-    let Ok((player_transform, mut fire_cooldown)) = players.get_single_mut() else {
+    let Ok((player_transform, mut fire_cooldown)) = players.single_mut() else {
         return;
     };
 
-    fire_cooldown.0 = (fire_cooldown.0 - time.delta_seconds()).max(0.0);
+    fire_cooldown.0 = (fire_cooldown.0 - time.delta_secs()).max(0.0);
 
     if state.selected_mode != GameMode::Arcade
         || !state.is_running
@@ -352,20 +398,9 @@ fn fire_player_projectiles(
         },
         ProjectileVelocity(forward * PROJECTILE_SPEED),
         ProjectileLifetime(PROJECTILE_LIFETIME_SECONDS),
-        SpriteBundle {
-            sprite: Sprite {
-                color: Color::srgba(0.98, 0.96, 0.58, 0.98),
-                custom_size: Some(PROJECTILE_SIZE),
-                ..default()
-            },
-            transform: Transform::from_translation(Vec3::new(
-                spawn_position.x,
-                spawn_position.y,
-                PROJECTILE_Z,
-            ))
+        Sprite::from_color(Color::srgba(0.98, 0.96, 0.58, 0.98), PROJECTILE_SIZE),
+        Transform::from_translation(Vec3::new(spawn_position.x, spawn_position.y, PROJECTILE_Z))
             .with_rotation(projectile_rotation),
-            ..default()
-        },
     ));
 
     fire_cooldown.0 = PROJECTILE_FIRE_INTERVAL_SECONDS;
@@ -380,7 +415,7 @@ fn move_projectiles(
         return;
     }
 
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
 
     for (mut transform, velocity, mut lifetime) in &mut projectiles {
         transform.translation += velocity.0 * delta_seconds;
@@ -394,7 +429,7 @@ fn cleanup_projectiles(
 ) {
     for (entity, transform, lifetime) in &projectiles {
         if lifetime.0 <= 0.0 || transform.translation.truncate().length() > MAP_RADIUS + 360.0 {
-            commands.entity(entity).despawn_recursive();
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -534,7 +569,7 @@ fn follow_player_camera(
     player_query: Query<&Transform, (With<Player>, Changed<Transform>)>,
     mut cameras: Query<&mut Transform, (With<Camera>, Without<Player>)>,
 ) {
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 

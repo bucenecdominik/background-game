@@ -140,6 +140,59 @@ struct DefeatOverlayRoot;
 #[derive(Component)]
 struct DefeatOverlayLabel;
 
+type Style = Node;
+
+#[derive(Bundle, Default)]
+struct NodeBundle {
+    style: Style,
+    background_color: BackgroundColor,
+    border_color: BorderColor,
+    z_index: ZIndex,
+    visibility: Visibility,
+}
+
+#[derive(Bundle, Default)]
+struct ButtonBundle {
+    button: Button,
+    style: Style,
+    background_color: BackgroundColor,
+    border_color: BorderColor,
+}
+
+struct TextStyle {
+    font_size: f32,
+    color: Color,
+}
+
+impl Default for TextStyle {
+    fn default() -> Self {
+        Self {
+            font_size: 14.0,
+            color: TEXT_PRIMARY,
+        }
+    }
+}
+
+#[derive(Bundle)]
+struct TextBundle {
+    text: Text,
+    font: TextFont,
+    color: TextColor,
+}
+
+impl TextBundle {
+    fn from_section(text: impl Into<String>, style: TextStyle) -> Self {
+        Self {
+            text: Text::new(text),
+            font: TextFont {
+                font_size: style.font_size,
+                ..default()
+            },
+            color: TextColor(style.color),
+        }
+    }
+}
+
 fn spawn_top_bar(mut commands: Commands) {
     commands
         .spawn(NodeBundle {
@@ -155,7 +208,7 @@ fn spawn_top_bar(mut commands: Commands) {
                 ..default()
             },
             background_color: Color::NONE.into(),
-            z_index: ZIndex::Global(10),
+            z_index: ZIndex(10),
             ..default()
         })
         .with_children(|root| {
@@ -167,11 +220,11 @@ fn spawn_top_bar(mut commands: Commands) {
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(8.0),
                     border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(18.0)),
                     ..default()
                 },
                 background_color: BAR_BACKGROUND.into(),
                 border_color: Color::srgba(0.28, 0.38, 0.52, 0.75).into(),
-                border_radius: BorderRadius::all(Val::Px(18.0)),
                 ..default()
             })
             .with_children(|bar| {
@@ -190,12 +243,12 @@ fn spawn_fps_counter(mut commands: Commands) {
                 right: Val::Px(FPS_PANEL_MARGIN),
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(6.0)),
                 border: UiRect::all(Val::Px(1.0)),
+                border_radius: BorderRadius::all(Val::Px(12.0)),
                 ..default()
             },
             background_color: PANEL_BACKGROUND.into(),
             border_color: Color::srgba(0.28, 0.38, 0.52, 0.75).into(),
-            border_radius: BorderRadius::all(Val::Px(12.0)),
-            z_index: ZIndex::Global(11),
+            z_index: ZIndex(11),
             ..default()
         })
         .with_children(|panel| {
@@ -228,12 +281,12 @@ fn spawn_minimap(mut commands: Commands) {
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     overflow: Overflow::clip(),
+                    border_radius: BorderRadius::all(Val::Percent(50.0)),
                     ..default()
                 },
                 background_color: MINIMAP_BACKGROUND.into(),
                 border_color: MINIMAP_BORDER.into(),
-                border_radius: BorderRadius::all(Val::Percent(50.0)),
-                z_index: ZIndex::Global(11),
+                z_index: ZIndex(11),
                 ..default()
             },
             MinimapRoot,
@@ -247,10 +300,10 @@ fn spawn_minimap(mut commands: Commands) {
                         top: Val::Px((MINIMAP_SIZE - MINIMAP_MARKER_SIZE) / 2.0),
                         width: Val::Px(MINIMAP_MARKER_SIZE),
                         height: Val::Px(MINIMAP_MARKER_SIZE),
+                        border_radius: BorderRadius::all(Val::Percent(50.0)),
                         ..default()
                     },
                     background_color: MINIMAP_MARKER.into(),
-                    border_radius: BorderRadius::all(Val::Percent(50.0)),
                     ..default()
                 },
                 MinimapMarker,
@@ -271,12 +324,12 @@ fn spawn_player_health_panel(mut commands: Commands) {
                     flex_direction: FlexDirection::Column,
                     row_gap: Val::Px(8.0),
                     border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(16.0)),
                     ..default()
                 },
                 background_color: PANEL_BACKGROUND.into(),
                 border_color: Color::srgba(0.28, 0.38, 0.52, 0.75).into(),
-                border_radius: BorderRadius::all(Val::Px(16.0)),
-                z_index: ZIndex::Global(11),
+                z_index: ZIndex(11),
                 ..default()
             },
             PlayerHealthRoot,
@@ -309,11 +362,11 @@ fn spawn_player_health_panel(mut commands: Commands) {
                         width: Val::Px(PLAYER_HEALTH_BAR_WIDTH),
                         height: Val::Px(PLAYER_HEALTH_BAR_HEIGHT),
                         border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(999.0)),
                         ..default()
                     },
                     background_color: Color::srgba(0.04, 0.06, 0.1, 0.94).into(),
                     border_color: Color::srgba(0.2, 0.32, 0.44, 0.82).into(),
-                    border_radius: BorderRadius::all(Val::Px(999.0)),
                     ..default()
                 })
                 .with_children(|bar| {
@@ -322,10 +375,10 @@ fn spawn_player_health_panel(mut commands: Commands) {
                             style: Style {
                                 width: Val::Px(PLAYER_HEALTH_BAR_WIDTH),
                                 height: Val::Percent(100.0),
+                                border_radius: BorderRadius::all(Val::Px(999.0)),
                                 ..default()
                             },
                             background_color: Color::srgba(0.24, 0.94, 0.54, 0.96).into(),
-                            border_radius: BorderRadius::all(Val::Px(999.0)),
                             ..default()
                         },
                         PlayerHealthFill,
@@ -348,7 +401,7 @@ fn spawn_defeat_overlay(mut commands: Commands) {
                 },
                 visibility: Visibility::Hidden,
                 background_color: Color::srgba(0.01, 0.02, 0.05, 0.78).into(),
-                z_index: ZIndex::Global(30),
+                z_index: ZIndex(30),
                 ..default()
             },
             DefeatOverlayRoot,
@@ -362,11 +415,11 @@ fn spawn_defeat_overlay(mut commands: Commands) {
                         row_gap: Val::Px(10.0),
                         align_items: AlignItems::Center,
                         border: UiRect::all(Val::Px(1.0)),
+                        border_radius: BorderRadius::all(Val::Px(18.0)),
                         ..default()
                     },
                     background_color: Color::srgba(0.06, 0.08, 0.14, 0.98).into(),
                     border_color: Color::srgba(0.92, 0.28, 0.26, 0.88).into(),
-                    border_radius: BorderRadius::all(Val::Px(18.0)),
                     ..default()
                 })
                 .with_children(|panel| {
@@ -394,7 +447,7 @@ fn spawn_defeat_overlay(mut commands: Commands) {
         });
 }
 
-fn spawn_header_row(parent: &mut ChildBuilder) {
+fn spawn_header_row(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -415,7 +468,7 @@ fn spawn_header_row(parent: &mut ChildBuilder) {
         });
 }
 
-fn spawn_action_row(parent: &mut ChildBuilder) {
+fn spawn_action_row(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -434,7 +487,7 @@ fn spawn_action_row(parent: &mut ChildBuilder) {
         });
 }
 
-fn spawn_brand_panel(parent: &mut ChildBuilder) {
+fn spawn_brand_panel(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -443,10 +496,10 @@ fn spawn_brand_panel(parent: &mut ChildBuilder) {
                 padding: UiRect::axes(Val::Px(10.0), Val::Px(5.0)),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(14.0)),
                 ..default()
             },
             background_color: PANEL_BACKGROUND.into(),
-            border_radius: BorderRadius::all(Val::Px(14.0)),
             ..default()
         })
         .with_children(|panel| {
@@ -469,7 +522,7 @@ fn spawn_brand_panel(parent: &mut ChildBuilder) {
         });
 }
 
-fn spawn_status_panel(parent: &mut ChildBuilder) {
+fn spawn_status_panel(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -478,10 +531,10 @@ fn spawn_status_panel(parent: &mut ChildBuilder) {
                 padding: UiRect::axes(Val::Px(12.0), Val::Px(0.0)),
                 align_items: AlignItems::Center,
                 justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(14.0)),
                 ..default()
             },
             background_color: PANEL_BACKGROUND.into(),
-            border_radius: BorderRadius::all(Val::Px(14.0)),
             ..default()
         })
         .with_children(|panel| {
@@ -499,7 +552,7 @@ fn spawn_status_panel(parent: &mut ChildBuilder) {
         });
 }
 
-fn spawn_mode_panel(parent: &mut ChildBuilder) {
+fn spawn_mode_panel(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -508,10 +561,10 @@ fn spawn_mode_panel(parent: &mut ChildBuilder) {
                 padding: UiRect::axes(Val::Px(8.0), Val::Px(7.0)),
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
+                border_radius: BorderRadius::all(Val::Px(14.0)),
                 ..default()
             },
             background_color: PANEL_BACKGROUND.into(),
-            border_radius: BorderRadius::all(Val::Px(14.0)),
             ..default()
         })
         .with_children(|panel| {
@@ -541,7 +594,7 @@ fn spawn_mode_panel(parent: &mut ChildBuilder) {
         });
 }
 
-fn spawn_control_panel(parent: &mut ChildBuilder) {
+fn spawn_control_panel(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn(NodeBundle {
             style: Style {
@@ -551,10 +604,10 @@ fn spawn_control_panel(parent: &mut ChildBuilder) {
                 flex_direction: FlexDirection::Column,
                 justify_content: JustifyContent::Center,
                 row_gap: Val::Px(6.0),
+                border_radius: BorderRadius::all(Val::Px(14.0)),
                 ..default()
             },
             background_color: PANEL_BACKGROUND.into(),
-            border_radius: BorderRadius::all(Val::Px(14.0)),
             ..default()
         })
         .with_children(|panel| {
@@ -583,7 +636,7 @@ enum ButtonKind {
 }
 
 fn spawn_button(
-    parent: &mut ChildBuilder,
+    parent: &mut ChildSpawnerCommands,
     label: &'static str,
     action: UiButtonAction,
     kind: ButtonKind,
@@ -609,12 +662,12 @@ fn spawn_button(
                     align_items: AlignItems::Center,
                     justify_content: JustifyContent::Center,
                     border: UiRect::all(Val::Px(1.0)),
+                    border_radius: BorderRadius::all(Val::Px(10.0)),
                     ..default()
                 },
                 background_color: button_color(action, Interaction::None, &UiGameState::default())
                     .into(),
                 border_color: Color::srgba(0.25, 0.34, 0.46, 0.7).into(),
-                border_radius: BorderRadius::all(Val::Px(10.0)),
                 ..default()
             },
             action,
@@ -649,7 +702,7 @@ fn spawn_button(
 fn handle_ui_buttons(
     mut state: ResMut<UiGameState>,
     mut interactions: Query<(&Interaction, &UiButtonAction), (Changed<Interaction>, With<Button>)>,
-    mut exit: EventWriter<AppExit>,
+    mut exit: MessageWriter<AppExit>,
 ) {
     for (interaction, action) in &mut interactions {
         if *interaction != Interaction::Pressed {
@@ -672,7 +725,7 @@ fn handle_ui_buttons(
                 }
             }
             UiButtonAction::ExitGame => {
-                exit.send(AppExit::Success);
+                exit.write(AppExit::Success);
             }
         }
     }
@@ -686,7 +739,7 @@ fn detect_player_defeat(
         return;
     }
 
-    let Ok(health) = player_query.get_single() else {
+    let Ok(health) = player_query.single() else {
         return;
     };
 
@@ -696,9 +749,9 @@ fn detect_player_defeat(
     }
 }
 
-fn handle_keyboard_exit(keys: Res<ButtonInput<KeyCode>>, mut exit: EventWriter<AppExit>) {
+fn handle_keyboard_exit(keys: Res<ButtonInput<KeyCode>>, mut exit: MessageWriter<AppExit>) {
     if keys.just_pressed(KeyCode::Escape) {
-        exit.send(AppExit::Success);
+        exit.write(AppExit::Success);
     }
 }
 
@@ -722,7 +775,7 @@ fn refresh_ui_buttons(
     }
 
     for mut text in &mut start_labels {
-        text.sections[0].value = if state.is_defeated {
+        text.0 = if state.is_defeated {
             "Start".into()
         } else if state.is_running {
             "Pause".into()
@@ -732,7 +785,7 @@ fn refresh_ui_buttons(
     }
 
     for mut text in &mut mode_labels {
-        text.sections[0].value = format!("Mode: {}", state.selected_mode.label());
+        text.0 = format!("Mode: {}", state.selected_mode.label());
     }
 }
 
@@ -748,7 +801,7 @@ fn refresh_fps_counter(
     };
 
     for mut text in &mut labels {
-        text.sections[0].value = format!("FPS: {fps:.0}");
+        text.0 = format!("FPS: {fps:.0}");
     }
 }
 
@@ -773,7 +826,7 @@ fn refresh_minimap(
         return;
     }
 
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 
@@ -811,12 +864,12 @@ fn refresh_player_health_panel(
         return;
     }
 
-    let Ok(health) = player_query.get_single() else {
+    let Ok(health) = player_query.single() else {
         return;
     };
 
     for mut text in &mut labels {
-        text.sections[0].value = format!("HP {:.0} / {:.0}", health.current, health.max);
+        text.0 = format!("HP {:.0} / {:.0}", health.current, health.max);
     }
 
     let width = PLAYER_HEALTH_BAR_WIDTH * health.ratio();
@@ -842,7 +895,7 @@ fn refresh_defeat_overlay(
     }
 
     for mut text in &mut labels {
-        text.sections[0].value = if show_defeat {
+        text.0 = if show_defeat {
             "Press New Game, then Start to play again.".into()
         } else {
             String::new()

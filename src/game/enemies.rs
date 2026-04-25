@@ -5,13 +5,12 @@ use std::collections::HashSet;
 use bevy::prelude::*;
 
 use super::{
-    player_contact_damage_fraction, player_contact_invulnerability_seconds, ContactCooldown,
-    Health, Player, Projectile, PLAYER_COLLISION_RADIUS,
+    effects, player_contact_damage_fraction, player_contact_invulnerability_seconds,
+    ContactCooldown, Health, Player, Projectile, PLAYER_COLLISION_RADIUS,
 };
 use crate::ui::{GameMode, UiGameState};
 
 const ENEMY_Z: f32 = 2.0;
-const EXPLOSION_EFFECT_Z: f32 = 4.5;
 const ENEMY_HEALTH_BAR_Z: f32 = 0.1;
 const ENEMY_HEALTH_BAR_WIDTH: f32 = 34.0;
 const ENEMY_HEALTH_BAR_HEIGHT: f32 = 5.0;
@@ -46,9 +45,10 @@ const KAMIKAZE_AVOIDANCE_WEIGHT: f32 = 1.85;
 const KAMIKAZE_SEEK_WEIGHT: f32 = 1.15;
 const KAMIKAZE_SPAWN_SPACING: f32 = 136.0;
 const KAMIKAZE_SPRITE: &str = "sprites/kamikaze-drone.png";
-const EXPLOSION_EFFECT_DURATION: f32 = 0.28;
-const EXPLOSION_FLASH_COLOR: Color = Color::srgba(1.0, 0.9, 0.72, 0.9);
-const EXPLOSION_RING_COLOR: Color = Color::srgba(1.0, 0.26, 0.18, 0.86);
+const KAMIKAZE_TRAIL_Z: f32 = ENEMY_Z - 0.18;
+const KAMIKAZE_TRAIL_MIN_SPEED: f32 = 120.0;
+const KAMIKAZE_TRAIL_INTERVAL_SECONDS: f32 = 0.026;
+const KAMIKAZE_TRAIL_OFFSET: f32 = 48.0;
 
 pub struct EnemiesPlugin;
 
@@ -67,13 +67,13 @@ impl Plugin for EnemiesPlugin {
                     refresh_enemy_visibility,
                     move_drone_swarm,
                     move_kamikaze_drones.after(move_drone_swarm),
+                    spawn_kamikaze_trails.after(move_kamikaze_drones),
                     sync_drone_swarm_visuals.after(move_drone_swarm),
-                    sync_kamikaze_visuals.after(move_kamikaze_drones),
+                    sync_kamikaze_visuals.after(spawn_kamikaze_trails),
                     handle_projectile_enemy_collisions,
                     handle_kamikaze_enemy_collisions.after(handle_projectile_enemy_collisions),
                     handle_enemy_player_collisions.after(handle_kamikaze_enemy_collisions),
                     resolve_pending_detonations.after(handle_enemy_player_collisions),
-                    animate_explosion_effects.after(resolve_pending_detonations),
                     despawn_destroyed_enemies.after(resolve_pending_detonations),
                     update_enemy_health_bars,
                 ),
@@ -156,17 +156,6 @@ enum EnemyWave {
     KamikazeDrone,
     Complete,
 }
-
-#[derive(Component)]
-struct ExplosionEffect {
-    timer: Timer,
-}
-
-#[derive(Component)]
-struct ExplosionFlash;
-
-#[derive(Component)]
-struct ExplosionRing;
 
 #[derive(Resource)]
 struct EnemyRandom(u32);
@@ -439,7 +428,7 @@ fn reset_enemy_state(
     wave_state.next_wave = EnemyWave::DroneSwarm;
 
     for entity in &enemies {
-        commands.entity(entity).despawn_recursive();
+        commands.entity(entity).despawn();
     }
 }
 
@@ -460,7 +449,7 @@ fn spawn_drone_swarm_wave(
         return;
     }
 
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 
@@ -515,25 +504,18 @@ fn spawn_drone_swarm_wave(
                     index + 1,
                     spec.role
                 )),
-                SpatialBundle {
-                    transform: Transform::from_xyz(position.x, position.y, ENEMY_Z),
-                    ..default()
-                },
+                Transform::from_xyz(position.x, position.y, ENEMY_Z),
             ))
             .with_children(|parent| {
                 parent.spawn((
                     DroneSwarmSprite,
-                    SpriteBundle {
-                        texture: variant.texture(&assets),
-                        sprite: Sprite {
-                            color: spec.color,
-                            custom_size: Some(variant.custom_size(spec.size)),
-                            ..default()
-                        },
-                        transform: Transform::default()
-                            .with_rotation(Quat::from_rotation_z(base_rotation)),
+                    Sprite {
+                        image: variant.texture(&assets),
+                        color: spec.color,
+                        custom_size: Some(variant.custom_size(spec.size)),
                         ..default()
                     },
+                    Transform::default().with_rotation(Quat::from_rotation_z(base_rotation)),
                 ));
                 spawn_enemy_health_bar(parent);
             });
@@ -557,7 +539,7 @@ fn spawn_kamikaze_wave(
         return;
     }
 
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 
@@ -596,6 +578,7 @@ fn spawn_kamikaze_wave(
                 },
                 KamikazeDroneAgent,
                 EnemyVelocity(facing * spec.speed),
+                effects::TrailEmitter::new(KAMIKAZE_TRAIL_INTERVAL_SECONDS),
                 KamikazeVisual { base_rotation },
                 Name::new(format!(
                     "{} {} - {}",
@@ -603,67 +586,43 @@ fn spawn_kamikaze_wave(
                     index + 1,
                     spec.role
                 )),
-                SpatialBundle {
-                    transform: Transform::from_xyz(position.x, position.y, ENEMY_Z),
-                    ..default()
-                },
+                Transform::from_xyz(position.x, position.y, ENEMY_Z),
             ))
             .with_children(|parent| {
                 parent.spawn((
                     KamikazeDroneSprite,
-                    SpriteBundle {
-                        texture: assets.sprite.clone(),
-                        sprite: Sprite {
-                            color: spec.color,
-                            custom_size: Some(spec.size),
-                            ..default()
-                        },
-                        transform: Transform::default()
-                            .with_rotation(Quat::from_rotation_z(base_rotation)),
+                    Sprite {
+                        image: assets.sprite.clone(),
+                        color: spec.color,
+                        custom_size: Some(spec.size),
                         ..default()
                     },
+                    Transform::default().with_rotation(Quat::from_rotation_z(base_rotation)),
                 ));
                 spawn_enemy_health_bar(parent);
             });
     }
 }
 
-fn spawn_enemy_health_bar(parent: &mut ChildBuilder) {
+fn spawn_enemy_health_bar(parent: &mut ChildSpawnerCommands) {
     parent
         .spawn((
             EnemyHealthBarRoot,
-            SpatialBundle {
-                transform: Transform::from_xyz(0.0, ENEMY_HEALTH_BAR_Y_OFFSET, ENEMY_HEALTH_BAR_Z),
-                ..default()
-            },
+            Transform::from_xyz(0.0, ENEMY_HEALTH_BAR_Y_OFFSET, ENEMY_HEALTH_BAR_Z),
         ))
         .with_children(|bar_root| {
-            bar_root.spawn(SpriteBundle {
-                sprite: Sprite {
-                    color: Color::srgba(0.05, 0.07, 0.11, 0.92),
-                    custom_size: Some(Vec2::new(
-                        ENEMY_HEALTH_BAR_WIDTH + 2.0,
-                        ENEMY_HEALTH_BAR_HEIGHT + 2.0,
-                    )),
-                    ..default()
-                },
-                ..default()
-            });
+            bar_root.spawn(Sprite::from_color(
+                Color::srgba(0.05, 0.07, 0.11, 0.92),
+                Vec2::new(ENEMY_HEALTH_BAR_WIDTH + 2.0, ENEMY_HEALTH_BAR_HEIGHT + 2.0),
+            ));
 
             bar_root.spawn((
                 EnemyHealthBarFill,
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: Color::srgba(0.28, 0.96, 0.54, 0.94),
-                        custom_size: Some(Vec2::new(
-                            ENEMY_HEALTH_BAR_WIDTH,
-                            ENEMY_HEALTH_BAR_HEIGHT,
-                        )),
-                        ..default()
-                    },
-                    transform: Transform::from_xyz(0.0, 0.0, 0.01),
-                    ..default()
-                },
+                Sprite::from_color(
+                    Color::srgba(0.28, 0.96, 0.54, 0.94),
+                    Vec2::new(ENEMY_HEALTH_BAR_WIDTH, ENEMY_HEALTH_BAR_HEIGHT),
+                ),
+                Transform::from_xyz(0.0, 0.0, 0.01),
             ));
         });
 }
@@ -699,7 +658,7 @@ fn move_drone_swarm(
         return;
     }
 
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 
@@ -716,7 +675,7 @@ fn move_drone_swarm(
         })
         .collect();
 
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
     let player_position = player_transform.translation.truncate();
 
     for (entity, mut transform, mut velocity, mut agent, visual, stats, health) in
@@ -784,7 +743,7 @@ fn move_drone_swarm(
         let steering = seek + cohesion + alignment + separation;
         let aggression_boost = stats.contact_damage * 0.65;
         let desired_velocity = steering.normalize_or_zero()
-            * (stats.speed + aggression_boost + randomish_speed_offset(entity.index()));
+            * (stats.speed + aggression_boost + randomish_speed_offset(entity.index_u32()));
         let velocity_delta = desired_velocity - current_velocity;
         let max_delta = DRONE_SWARM_ACCELERATION * delta_seconds;
         let clamped_delta = clamp_vec2_length(velocity_delta, max_delta);
@@ -841,7 +800,7 @@ fn move_kamikaze_drones(
         return;
     }
 
-    let Ok(player_transform) = player_query.get_single() else {
+    let Ok(player_transform) = player_query.single() else {
         return;
     };
 
@@ -852,7 +811,7 @@ fn move_kamikaze_drones(
         .collect();
 
     let player_position = player_transform.translation.truncate();
-    let delta_seconds = time.delta_seconds();
+    let delta_seconds = time.delta_secs();
 
     for (entity, mut transform, mut velocity, stats, _agent) in &mut queries.p1() {
         let current_position = transform.translation.truncate();
@@ -877,7 +836,7 @@ fn move_kamikaze_drones(
         let seek = (player_position - current_position).normalize_or_zero() * KAMIKAZE_SEEK_WEIGHT;
         let steering = seek + clamp_vec2_length(avoidance, 1.6) * KAMIKAZE_AVOIDANCE_WEIGHT;
         let desired_velocity = steering.normalize_or_zero()
-            * (stats.speed + randomish_speed_offset(entity.index()) * 0.45);
+            * (stats.speed + randomish_speed_offset(entity.index_u32()) * 0.45);
         let velocity_delta = desired_velocity - velocity.0;
         let clamped_delta =
             clamp_vec2_length(velocity_delta, KAMIKAZE_ACCELERATION * delta_seconds);
@@ -885,6 +844,49 @@ fn move_kamikaze_drones(
 
         transform.translation.x += velocity.0.x * delta_seconds;
         transform.translation.y += velocity.0.y * delta_seconds;
+    }
+}
+
+fn spawn_kamikaze_trails(
+    mut commands: Commands,
+    time: Res<Time>,
+    state: Res<UiGameState>,
+    mut drones: Query<
+        (&Transform, &EnemyVelocity, &mut effects::TrailEmitter),
+        (With<KamikazeDroneAgent>, Without<PendingDetonation>),
+    >,
+) {
+    if state.selected_mode != GameMode::Arcade || !state.is_running {
+        return;
+    }
+
+    for (transform, velocity, mut emitter) in &mut drones {
+        let speed = velocity.0.length();
+        if speed < KAMIKAZE_TRAIL_MIN_SPEED || !emitter.tick(time.delta_secs()) {
+            continue;
+        }
+
+        let direction = -velocity.0.normalize_or_zero();
+        let speed_ratio = ((speed - KAMIKAZE_TRAIL_MIN_SPEED)
+            / (KAMIKAZE_MAX_SPEED - KAMIKAZE_TRAIL_MIN_SPEED))
+            .clamp(0.0, 1.0);
+        let position = transform.translation.truncate()
+            + direction * (KAMIKAZE_TRAIL_OFFSET + speed_ratio * 18.0);
+
+        effects::spawn_trail_segment(
+            &mut commands,
+            effects::TrailSegmentSpec {
+                position,
+                direction,
+                z: KAMIKAZE_TRAIL_Z,
+                length: 36.0 + speed_ratio * 66.0,
+                width: 10.0 + speed_ratio * 14.0,
+                lifetime: 0.12 + speed_ratio * 0.11,
+                color: Color::srgba(1.0, 0.34, 0.08, 1.0),
+                alpha: 0.34 + speed_ratio * 0.46,
+                drift_speed: 58.0 + speed_ratio * 112.0,
+            },
+        );
     }
 }
 
@@ -898,14 +900,14 @@ fn sync_drone_swarm_visuals(
             Without<PendingDetonation>,
         ),
     >,
-    mut sprite_transforms: Query<(&Parent, &mut Transform), With<DroneSwarmSprite>>,
+    mut sprite_transforms: Query<(&ChildOf, &mut Transform), With<DroneSwarmSprite>>,
 ) {
     if state.selected_mode != GameMode::Arcade || !state.is_running {
         return;
     }
 
     for (parent, mut transform) in &mut sprite_transforms {
-        let Ok((velocity, agent, visual, health)) = enemy_visuals.get(parent.get()) else {
+        let Ok((velocity, agent, visual, health)) = enemy_visuals.get(parent.parent()) else {
             continue;
         };
 
@@ -930,14 +932,14 @@ fn sync_kamikaze_visuals(
             Without<PendingDetonation>,
         ),
     >,
-    mut sprite_transforms: Query<(&Parent, &mut Transform), With<KamikazeDroneSprite>>,
+    mut sprite_transforms: Query<(&ChildOf, &mut Transform), With<KamikazeDroneSprite>>,
 ) {
     if state.selected_mode != GameMode::Arcade || !state.is_running {
         return;
     }
 
     for (parent, mut transform) in &mut sprite_transforms {
-        let Ok((velocity, visual, health)) = enemy_visuals.get(parent.get()) else {
+        let Ok((velocity, visual, health)) = enemy_visuals.get(parent.parent()) else {
             continue;
         };
 
@@ -981,7 +983,7 @@ fn handle_projectile_enemy_collisions(
 
         if let Some((_enemy_entity, mut health)) = hit_enemy {
             health.damage_fraction(projectile.damage_fraction);
-            commands.entity(projectile_entity).despawn_recursive();
+            commands.entity(projectile_entity).despawn();
         }
     }
 }
@@ -1040,8 +1042,7 @@ fn handle_enemy_player_collisions(
         return;
     }
 
-    let Ok((player_transform, mut player_health, mut contact_cooldown)) =
-        player_query.get_single_mut()
+    let Ok((player_transform, mut player_health, mut contact_cooldown)) = player_query.single_mut()
     else {
         return;
     };
@@ -1101,7 +1102,7 @@ fn resolve_pending_detonations(
     }
 
     if let Ok((player_transform, mut player_health, mut contact_cooldown)) =
-        player_query.get_single_mut()
+        player_query.single_mut()
     {
         let player_position = player_transform.translation.truncate();
 
@@ -1135,39 +1136,8 @@ fn resolve_pending_detonations(
             }
         }
 
-        spawn_explosion_effect(&mut commands, *explosion_center, stats.explosion_radius);
-        commands.entity(*detonating_entity).despawn_recursive();
-    }
-}
-
-fn animate_explosion_effects(
-    mut commands: Commands,
-    time: Res<Time>,
-    mut effects: Query<(Entity, &mut ExplosionEffect, &Children)>,
-    mut flashes: Query<(&mut Sprite, &mut Transform), With<ExplosionFlash>>,
-    mut rings: Query<(&mut Sprite, &mut Transform), (With<ExplosionRing>, Without<ExplosionFlash>)>,
-) {
-    for (entity, mut effect, children) in &mut effects {
-        effect.timer.tick(time.delta());
-        let progress = (effect.timer.elapsed_secs() / EXPLOSION_EFFECT_DURATION).clamp(0.0, 1.0);
-
-        for &child in children {
-            if let Ok((mut sprite, mut transform)) = flashes.get_mut(child) {
-                let scale = 0.35 + progress * 0.85;
-                sprite.color = EXPLOSION_FLASH_COLOR.with_alpha((1.0 - progress) * 0.9);
-                transform.scale = Vec3::splat(scale);
-            }
-
-            if let Ok((mut sprite, mut transform)) = rings.get_mut(child) {
-                let scale = 0.18 + progress * 1.25;
-                sprite.color = EXPLOSION_RING_COLOR.with_alpha((1.0 - progress) * 0.82);
-                transform.scale = Vec3::splat(scale);
-            }
-        }
-
-        if effect.timer.finished() {
-            commands.entity(entity).despawn_recursive();
-        }
+        effects::spawn_explosion_effect(&mut commands, *explosion_center, stats.explosion_radius);
+        commands.entity(*detonating_entity).despawn();
     }
 }
 
@@ -1177,7 +1147,7 @@ fn despawn_destroyed_enemies(
 ) {
     for (entity, health) in &enemies {
         if health.current <= 0.0 {
-            commands.entity(entity).despawn_recursive();
+            commands.entity(entity).despawn();
         }
     }
 }
@@ -1186,20 +1156,20 @@ fn update_enemy_health_bars(
     state: Res<UiGameState>,
     enemy_health: Query<&Health, With<Enemy>>,
     mut transforms: ParamSet<(
-        Query<(&Parent, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
+        Query<(&ChildOf, &mut Sprite, &mut Transform), With<EnemyHealthBarFill>>,
     )>,
-    root_parents: Query<&Parent, With<EnemyHealthBarRoot>>,
+    root_parents: Query<&ChildOf, With<EnemyHealthBarRoot>>,
 ) {
     if state.selected_mode != GameMode::Arcade {
         return;
     }
 
     for (parent, mut sprite, mut transform) in &mut transforms.p0() {
-        let Ok(root_parent) = root_parents.get(parent.get()) else {
+        let Ok(root_parent) = root_parents.get(parent.parent()) else {
             continue;
         };
 
-        let Ok(health) = enemy_health.get(root_parent.get()) else {
+        let Ok(health) = enemy_health.get(root_parent.parent()) else {
             continue;
         };
 
@@ -1234,49 +1204,6 @@ fn refresh_enemy_visibility(
     for mut enemy_visibility in &mut enemies {
         *enemy_visibility = visibility;
     }
-}
-
-fn spawn_explosion_effect(commands: &mut Commands, position: Vec2, radius: f32) {
-    let flash_size = radius * 0.85;
-    let ring_size = radius * 1.35;
-
-    commands
-        .spawn((
-            ExplosionEffect {
-                timer: Timer::from_seconds(EXPLOSION_EFFECT_DURATION, TimerMode::Once),
-            },
-            SpatialBundle {
-                transform: Transform::from_xyz(position.x, position.y, EXPLOSION_EFFECT_Z),
-                ..default()
-            },
-        ))
-        .with_children(|parent| {
-            parent.spawn((
-                ExplosionFlash,
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: EXPLOSION_FLASH_COLOR,
-                        custom_size: Some(Vec2::splat(flash_size)),
-                        ..default()
-                    },
-                    transform: Transform::default().with_scale(Vec3::splat(0.35)),
-                    ..default()
-                },
-            ));
-
-            parent.spawn((
-                ExplosionRing,
-                SpriteBundle {
-                    sprite: Sprite {
-                        color: EXPLOSION_RING_COLOR,
-                        custom_size: Some(Vec2::splat(ring_size)),
-                        ..default()
-                    },
-                    transform: Transform::default().with_scale(Vec3::splat(0.18)),
-                    ..default()
-                },
-            ));
-        });
 }
 
 fn random_spawn_center(random: &mut EnemyRandom, player_position: Vec2) -> Vec2 {

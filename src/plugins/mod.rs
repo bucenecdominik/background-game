@@ -10,19 +10,19 @@ pub struct CorePlugin;
 
 impl Plugin for CorePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins((FrameTimeDiagnosticsPlugin, UiPlugin, GamePlugin))
+        app.add_plugins((FrameTimeDiagnosticsPlugin::default(), UiPlugin, GamePlugin))
             .add_systems(Startup, spawn_camera);
     }
 }
 
 fn spawn_camera(mut commands: Commands) {
-    commands.spawn(Camera2dBundle {
-        camera: Camera {
+    commands.spawn((
+        Camera2d,
+        Camera {
             clear_color: ClearColorConfig::Custom(Color::BLACK),
             ..default()
         },
-        ..default()
-    });
+    ));
 }
 
 #[cfg(test)]
